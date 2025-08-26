@@ -1,0 +1,666 @@
+Directory structure:
+└── optionstracker/
+    ├── README.md
+    ├── requirements.txt
+    ├── config/
+    │   └── options.json
+    ├── docs/
+    │   ├── app.js
+    │   ├── index.html
+    │   ├── style.css
+    │   ├── .nojekyll
+    │   └── data/
+    │       ├── history.csv
+    │       ├── last_run.txt
+    │       └── portfolio.csv
+    ├── scripts/
+    │   └── fetch_and_update.py
+    └── .github/
+        └── workflows/
+            └── daily.yaml
+
+================================================
+FILE: README.md
+================================================
+
+# Options Tracker (GitHub Pages + GitHub Actions)
+
+A simple static site that tracks the *marked* value of your options portfolio daily and charts progress over time.
+- Hosted on GitHub Pages (`/docs` folder).
+- Automatically updates daily via GitHub Actions.
+- Price = midpoint between bid/ask minus $0.05, floored at $0.00.
+
+
+## Quick Start
+
+1. **Create a new GitHub repo** and upload this folder's contents.
+2. Edit `config/options.json` with your options positions (examples included).
+3. Commit + push to `main` (or your default branch).
+4. **Enable GitHub Pages** in repo settings:
+   - Source: `Deploy from a branch`
+   - Branch: `main`
+   - Folder: `/docs`
+5. The site will be available at: `https://<your-username>.github.io/<repo-name>/`
+6. The scheduled workflow runs daily and writes data to `docs/data/`. You can also run it manually in the Actions tab.
+
+> Note: This uses free, public Yahoo Finance data via `yfinance`. If you prefer a commercial API (Polygon, Finnhub, Tradier, etc.), swap out the fetch logic in `scripts/fetch_and_update.py`.
+
+## Configure Your Positions
+
+Edit `config/options.json`:
+```json
+{
+  "base_currency": "USD",
+  "positions": [
+    {
+      "underlying": "AAPL",
+      "expiry": "2025-09-19",
+      "type": "call",
+      "strike": 200,
+      "contracts": 2,
+      "cost_per_contract": 5.50
+    },
+    {
+      "underlying": "MSFT",
+      "expiry": "2025-12-19",
+      "type": "put",
+      "strike": 300,
+      "contracts": 1,
+      "cost_per_contract": 12.40
+    }
+  ]
+}
+```
+- `type`: `"call"` or `"put"`
+- `contracts`: number of contracts (1 contract = 100 shares)
+- `cost_per_contract`: entry price in USD **per contract** (not per 100 shares)
+
+## What gets recorded?
+
+Daily marks (UTC date):
+- Per-option price = `max(((bid + ask)/2 - 0.05), 0.00)`
+- Value = `price * contracts * 100`
+- P&L = `value - (cost_per_contract * contracts * 100)`
+- Portfolio totals are also computed and stored.
+
+Data files saved to `docs/data/`:
+- `history.csv`: per-position snapshot for each run
+- `portfolio.csv`: aggregated portfolio value and P&L by date
+- `last_run.txt`: timestamp of the last successful update
+
+## Local Testing
+
+You can run the script locally:
+```bash
+pip install -r requirements.txt
+python scripts/fetch_and_update.py
+```
+Then open `docs/index.html` in your browser.
+
+## Notes & Limitations
+- Yahoo Finance data may occasionally omit a bid/ask for certain contracts. In that case, we fallback to `lastPrice - 0.05` (floored at $0).
+- Schedule uses UTC. Default is once daily at `23:10 UTC`. Adjust in `.github/workflows/daily.yaml` if you prefer.
+- This is for **personal use**; no guarantees for accuracy or completeness.
+
+
+
+================================================
+FILE: requirements.txt
+================================================
+yfinance==0.2.52
+pandas==2.2.2
+pytz==2024.1
+requests==2.32.3
+
+
+
+================================================
+FILE: config/options.json
+================================================
+{
+  "base_currency": "USD",
+  "positions": [
+    {
+      "underlying": "CB",
+      "expiry": "2027-01-15",
+      "type": "call",
+      "strike": 300,
+      "contracts": 1,
+      "cost_per_contract": 42.7
+    },
+    {
+      "underlying": "COF",
+      "expiry": "2027-01-15",
+      "type": "call",
+      "strike": 160,
+      "contracts": 1,
+      "cost_per_contract": 35.5
+    },
+    {
+      "underlying": "COOK",
+      "expiry": "2025-09-19",
+      "type": "call",
+      "strike": 3,
+      "contracts": 4,
+      "cost_per_contract": 0.3375
+    },
+    {
+      "underlying": "DPZ",
+      "expiry": "2027-01-15",
+      "type": "call",
+      "strike": 580,
+      "contracts": 1,
+      "cost_per_contract": 37.6
+    },
+    {
+      "underlying": "HD",
+      "expiry": "2027-01-15",
+      "type": "call",
+      "strike": 420,
+      "contracts": 1,
+      "cost_per_contract": 25.95
+    },
+    {
+      "underlying": "JNJ",
+      "expiry": "2027-01-15",
+      "type": "call",
+      "strike": 155,
+      "contracts": 1,
+      "cost_per_contract": 22.7
+    },
+    {
+      "underlying": "MCD",
+      "expiry": "2027-01-15",
+      "type": "call",
+      "strike": 340,
+      "contracts": 1,
+      "cost_per_contract": 24.7
+    },
+    {
+      "underlying": "MWA",
+      "expiry": "2026-02-20",
+      "type": "call",
+      "strike": 22.5,
+      "contracts": 5,
+      "cost_per_contract": 3.91
+    },
+    {
+      "underlying": "NGD",
+      "expiry": "2027-01-15",
+      "type": "call",
+      "strike": 3,
+      "contracts": 10,
+      "cost_per_contract": 1.15
+    },
+    {
+      "underlying": "ORCL",
+      "expiry": "2027-01-15",
+      "type": "call",
+      "strike": 130,
+      "contracts": 1,
+      "cost_per_contract": 44.2
+    },
+    {
+      "underlying": "RSVR",
+      "expiry": "2026-01-16",
+      "type": "call",
+      "strike": 5,
+      "contracts": 11,
+      "cost_per_contract": 2.72
+    },
+    {
+      "underlying": "TSLA",
+      "expiry": "2027-06-17",
+      "type": "call",
+      "strike": 800,
+      "contracts": 1,
+      "cost_per_contract": 22.95
+    }
+  ]
+}
+
+
+================================================
+FILE: docs/app.js
+================================================
+
+async function fetchText(path) {
+  const res = await fetch(path, { cache: "no-cache" });
+  if (!res.ok) return "";
+  return res.text();
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  if (lines.length <= 1) return { headers: [], rows: [] };
+  const headers = lines[0].split(",");
+  const rows = lines.slice(1).map(line => {
+    const cols = line.split(",");
+    const obj = {};
+    headers.forEach((h, i) => obj[h] = cols[i]);
+    return obj;
+  });
+  return { headers, rows };
+}
+
+function fmtUsd(n) {
+  const num = typeof n === "string" ? parseFloat(n) : n;
+  if (Number.isNaN(num)) return "-";
+  return num.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+}
+
+function byDateAsc(a, b) {
+  return a.date.localeCompare(b.date);
+}
+
+async function loadLastRun() {
+  const t = await fetchText("./data/last_run.txt");
+  const el = document.getElementById("last-run");
+  if (t) {
+    const when = new Date(t.trim());
+    el.textContent = "Last update: " + when.toLocaleString();
+  } else {
+    el.textContent = "Last update: (not yet recorded)";
+  }
+}
+
+async function loadPortfolioChart() {
+  const text = await fetchText("./data/portfolio.csv");
+  const { rows } = parseCSV(text);
+  rows.sort(byDateAsc);
+
+  const labels = rows.map(r => r.date);
+  const totalValue = rows.map(r => parseFloat(r.total_value));
+  const totalPnl = rows.map(r => parseFloat(r.total_pnl));
+
+  const ctx = document.getElementById("portfolioChart").getContext("2d");
+  const chart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        { label: "Total Value", data: totalValue },
+        { label: "Total P&L", data: totalPnl }
+      ]
+    },
+    options: {
+      responsive: true,
+      scales: {
+        y: {
+          beginAtZero: false
+        }
+      }
+    }
+  });
+}
+
+async function loadPositionsTable() {
+  const text = await fetchText("./data/history.csv");
+  const { rows } = parseCSV(text);
+  if (!rows.length) return;
+
+  // pick the latest date's rows
+  rows.sort(byDateAsc);
+  const latestDate = rows[rows.length - 1].date;
+  const todays = rows.filter(r => r.date === latestDate);
+
+  const tbody = document.querySelector("#positions-table tbody");
+  tbody.innerHTML = "";
+
+  todays.forEach(r => {
+    const tr = document.createElement("tr");
+    const pnl = parseFloat(r.pnl);
+    const pnlPct = parseFloat(r.pnl_pct);
+    tr.innerHTML = `
+      <td>${r.symbolKey}</td>
+      <td>${r.contracts}</td>
+      <td>${fmtUsd(r.cost_per_contract)}</td>
+      <td>${fmtUsd(r.price)}</td>
+      <td>${fmtUsd(r.value)}</td>
+      <td class="${pnl >= 0 ? "good" : "bad"}">${fmtUsd(pnl)}</td>
+      <td class="${pnlPct >= 0 ? "good" : "bad"}">${(isFinite(pnlPct) ? pnlPct.toFixed(2) : "-")}%</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+async function init() {
+  await Promise.all([loadLastRun(), loadPortfolioChart(), loadPositionsTable()]);
+}
+init();
+
+
+
+================================================
+FILE: docs/index.html
+================================================
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Options Tracker</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+    <link rel="preconnect" href="https://unpkg.com" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header class="container">
+      <h1>📈 Options Tracker</h1>
+      <p class="muted">Midpoint − $0.05 per contract, floored at $0.00. Updated daily.</p>
+      <p id="last-run" class="muted">Last update: …</p>
+    </header>
+
+    <main class="container">
+      <section class="card">
+        <h2>Portfolio Value &amp; P&amp;L Over Time</h2>
+        <canvas id="portfolioChart"></canvas>
+      </section>
+
+      <section class="card">
+        <h2>Today’s Positions</h2>
+        <div class="table-wrap">
+          <table id="positions-table">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Contracts</th>
+                <th>Cost/Contract</th>
+                <th>Marked Price</th>
+                <th>Value</th>
+                <th>P&amp;L</th>
+                <th>P&amp;L %</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <footer class="container muted small">
+      <p>Data from Yahoo Finance via yfinance. For personal use only.</p>
+    </footer>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
+
+
+
+================================================
+FILE: docs/style.css
+================================================
+
+:root {
+  --bg: #0b0d10;
+  --card: #12161b;
+  --text: #e5e7eb;
+  --muted: #94a3b8;
+  --accent: #60a5fa;
+  --good: #16a34a;
+  --bad: #ef4444;
+  --border: #1f2937;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+.container { width: 100%; max-width: 1100px; margin: 0 auto; padding: 16px; }
+header h1 { margin: 0 0 8px; font-weight: 700; letter-spacing: 0.3px; }
+.muted { color: var(--muted); }
+.small { font-size: 0.9rem; }
+
+.card {
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.00));
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+  margin: 16px 0;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.2);
+}
+
+.table-wrap { overflow: auto; border-radius: 12px; border: 1px solid var(--border); }
+table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+thead { background: #111827; }
+th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: right; }
+th:first-child, td:first-child { text-align: left; }
+tbody tr:hover { background: rgba(255,255,255,0.03); }
+
+.bad { color: var(--bad); }
+.good { color: var(--good); }
+
+
+
+================================================
+FILE: docs/.nojekyll
+================================================
+Tue Aug 26 18:00:20 UTC 2025
+
+
+
+================================================
+FILE: docs/data/history.csv
+================================================
+date,symbolKey,underlying,expiry,type,strike,contracts,cost_per_contract,price,value,pnl,pnl_pct
+
+
+
+================================================
+FILE: docs/data/last_run.txt
+================================================
+[Empty file]
+
+
+================================================
+FILE: docs/data/portfolio.csv
+================================================
+date,total_value,total_cost_basis,total_pnl
+
+
+
+================================================
+FILE: scripts/fetch_and_update.py
+================================================
+
+import os
+import json
+import math
+import time
+import pandas as pd
+from datetime import datetime, timezone
+import yfinance as yf
+
+ROOT = os.path.dirname(os.path.dirname(__file__))
+DOCS_DATA = os.path.join(ROOT, "docs", "data")
+CONFIG_PATH = os.path.join(ROOT, "config", "options.json")
+
+os.makedirs(DOCS_DATA, exist_ok=True)
+
+HISTORY_CSV = os.path.join(DOCS_DATA, "history.csv")
+PORTFOLIO_CSV = os.path.join(DOCS_DATA, "portfolio.csv")
+LAST_RUN = os.path.join(DOCS_DATA, "last_run.txt")
+
+def read_config(path: str):
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def infer_symbol_key(pos):
+    # e.g. "AAPL 2025-09-19 C 200"
+    t = "C" if pos["type"].lower().startswith("c") else "P"
+    return f'{pos["underlying"]} {pos["expiry"]} {t} {pos["strike"]}'
+
+def mark_price(bid, ask, last_price):
+    # midpoint minus 0.05, floored at 0.00, fallback to lastPrice if bid/ask missing
+    if bid is not None and ask is not None and not (math.isnan(bid) or math.isnan(ask)):
+        px = (float(bid) + float(ask)) / 2.0 - 0.05
+    else:
+        # fallback to last price
+        if last_price is None or (isinstance(last_price, float) and math.isnan(last_price)):
+            return 0.0
+        px = float(last_price) - 0.05
+    return round(max(px, 0.0), 2)
+
+def fetch_option_row(underlying: str, expiry: str, typ: str, strike: float):
+    """
+    Returns dict with bid, ask, lastPrice for the specified contract using yfinance option_chain.
+    """
+    tk = yf.Ticker(underlying)
+    try:
+        chain = tk.option_chain(expiry)
+        df = chain.calls if typ.lower().startswith("c") else chain.puts
+        row = df.loc[df["strike"] == float(strike)]
+        if row.empty:
+            return None
+        row = row.iloc[0]
+        out = {
+            "bid": float(row.get("bid", float("nan"))),
+            "ask": float(row.get("ask", float("nan"))),
+            "lastPrice": float(row.get("lastPrice", float("nan")))
+        }
+        return out
+    except Exception as e:
+        print(f"Error fetching {underlying} {expiry} {typ} {strike}: {e}")
+        return None
+
+def ensure_csv_headers():
+    if not os.path.exists(HISTORY_CSV):
+        with open(HISTORY_CSV, "w", encoding="utf-8") as f:
+            f.write("date,symbolKey,underlying,expiry,type,strike,contracts,cost_per_contract,price,value,pnl,pnl_pct\n")
+    if not os.path.exists(PORTFOLIO_CSV):
+        with open(PORTFOLIO_CSV, "w", encoding="utf-8") as f:
+            f.write("date,total_value,total_cost_basis,total_pnl\n")
+
+def append_history(rows):
+    # rows: list of dicts
+    with open(HISTORY_CSV, "a", encoding="utf-8") as f:
+        for r in rows:
+            f.write(
+                "{date},{symbolKey},{underlying},{expiry},{type},{strike},{contracts},{cost_per_contract},{price},{value},{pnl},{pnl_pct}\n".format(
+                    **r
+                )
+            )
+
+def append_portfolio(date_str, total_value, total_cost, total_pnl):
+    with open(PORTFOLIO_CSV, "a", encoding="utf-8") as f:
+        f.write(f"{date_str},{total_value:.2f},{total_cost:.2f},{total_pnl:.2f}\n")
+
+def main():
+    cfg = read_config(CONFIG_PATH)
+    positions = cfg.get("positions", [])
+    ensure_csv_headers()
+
+    # Use UTC date for the daily record
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    history_rows = []
+
+    total_value = 0.0
+    total_cost = 0.0
+
+    for pos in positions:
+        underlying = pos["underlying"]
+        expiry = pos["expiry"]
+        typ = pos["type"]
+        strike = float(pos["strike"])
+        contracts = int(pos["contracts"])
+        cost_per_contract = float(pos["cost_per_contract"])
+
+        info = fetch_option_row(underlying, expiry, typ, strike)
+        if info is None:
+            # write zeroes but keep the row so you can spot missing contracts
+            price = 0.0
+        else:
+            price = mark_price(info.get("bid"), info.get("ask"), info.get("lastPrice"))
+
+        value = price * contracts * 100.0
+        cost_basis = cost_per_contract * contracts * 100.0
+        pnl = value - cost_basis
+        pnl_pct = (pnl / cost_basis * 100.0) if cost_basis > 0 else 0.0
+
+        total_value += value
+        total_cost += cost_basis
+
+        row = {
+            "date": date_str,
+            "symbolKey": (f"{underlying} {expiry} " + ("C" if typ.lower().startswith("c") else "P") + f" {strike}"),
+            "underlying": underlying,
+            "expiry": expiry,
+            "type": typ.lower(),
+            "strike": f"{strike:.2f}",
+            "contracts": str(contracts),
+            "cost_per_contract": f"{cost_per_contract:.2f}",
+            "price": f"{price:.2f}",
+            "value": f"{value:.2f}",
+            "pnl": f"{pnl:.2f}",
+            "pnl_pct": f"{pnl_pct:.2f}",
+        }
+        history_rows.append(row)
+
+        # tiny delay
+        time.sleep(0.2)
+
+    # Append rows (no duplicate check; time series by date)
+    append_history(history_rows)
+    total_pnl = total_value - total_cost
+    append_portfolio(date_str, total_value, total_cost, total_pnl)
+
+    with open(LAST_RUN, "w", encoding="utf-8") as f:
+        f.write(datetime.now(timezone.utc).isoformat())
+
+if __name__ == "__main__":
+    main()
+
+
+
+================================================
+FILE: .github/workflows/daily.yaml
+================================================
+name: Daily Options Update
+
+concurrency:
+  group: options-tracker-data
+  cancel-in-progress: true
+
+on:
+  schedule:
+    - cron: "10 23 * * *"   # runs daily at 23:10 UTC
+  workflow_dispatch:         # enables the "Run workflow" button
+  push:
+    paths:
+      - "config/options.json"
+      - "scripts/**"
+
+permissions:
+  contents: write
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run fetch script
+        run: |
+          python scripts/fetch_and_update.py
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/data/*.csv docs/data/*.txt || true
+          if ! git diff --cached --quiet; then
+            git commit -m "Daily data update"
+            git push
+          else
+            echo "No changes to commit."
+          fi
+
+

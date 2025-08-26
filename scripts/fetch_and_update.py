@@ -1,40 +1,25 @@
-import os, json, math, time, random
-from datetime import datetime, timezone
-import pandas as pd
-import yfinance as yf
-from yfinance.exceptions import YFRateLimitError
+import os, json, math, time, random, re
+from datetime import datetime, timezone, date
 import requests
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 DOCS_DATA = os.path.join(ROOT, "docs", "data")
 CONFIG_PATH = os.path.join(ROOT, "config", "options.json")
-
 os.makedirs(DOCS_DATA, exist_ok=True)
 
 HISTORY_CSV   = os.path.join(DOCS_DATA, "history.csv")
 PORTFOLIO_CSV = os.path.join(DOCS_DATA, "portfolio.csv")
 LAST_RUN      = os.path.join(DOCS_DATA, "last_run.txt")
 
-# ---------- knobs ----------
 FAST_MODE = os.getenv("FAST_MODE") == "1" or os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
-MAX_RETRIES        = 3 if FAST_MODE else 5
-BASE_SLEEP         = 0.8 if FAST_MODE else 1.2
-JITTER             = 0.4
-BETWEEN_UNDERLYINGS= 0.3 if FAST_MODE else 0.8
-INITIAL_STAGGER_MAX= 0.0 if FAST_MODE else 6.0
+MAX_RETRIES        = 2 if FAST_MODE else 4
+BASE_SLEEP         = 0.6 if FAST_MODE else 1.0
+JITTER             = 0.3
+BETWEEN_UNDERLYINGS= 0.15 if FAST_MODE else 0.5
+INITIAL_STAGGER_MAX= 0.0 if FAST_MODE else 2.5
 
-def is_nan(x):
-    try: return math.isnan(float(x))
-    except Exception: return False
-
-def mark_price(bid, ask, last_price):
-    # midpoint minus 0.05, floored at 0.00; fallback to lastPrice
-    if bid is not None and ask is not None and not (is_nan(bid) or is_nan(ask)):
-        px = (float(bid) + float(ask)) / 2.0 - 0.05
-    else:
-        if last_price is None or is_nan(last_price): return 0.0
-        px = float(last_price) - 0.05
-    return round(max(px, 0.0), 2)
+CBOE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{sym}.json"
+UA = {"User-Agent": "options-tracker/1.0", "Accept": "application/json"}
 
 def read_config(path: str):
     with open(path, "r", encoding="utf-8") as f:
@@ -44,50 +29,81 @@ def symbol_key(pos):
     t = "C" if pos["type"].lower().startswith("c") else "P"
     return f'{pos["underlying"]} {pos["expiry"]} {t} {pos["strike"]}'
 
-def sleep_backoff(attempt: int):
-    delay = (BASE_SLEEP * (2 ** attempt)) + random.uniform(-JITTER, JITTER)
-    time.sleep(max(0.2, delay))
+def is_nan(x):
+    try: return math.isnan(float(x))
+    except Exception: return False
 
-def with_retries(fn, *args, **kwargs):
+def mark_price(bid, ask, last_price):
+    if bid is not None and ask is not None and not (is_nan(bid) or is_nan(ask)):
+        px = (float(bid) + float(ask)) / 2.0 - 0.05
+    else:
+        if last_price is None or is_nan(last_price): return 0.0
+        px = float(last_price) - 0.05
+    return round(max(px, 0.0), 2)
+
+def backoff_sleep(attempt: int):
+    delay = (BASE_SLEEP * (2 ** attempt)) + random.uniform(-JITTER, JITTER)
+    time.sleep(max(0.15, delay))
+
+def fetch_cboe_chain(sym: str):
+    # For equities/ETFs just {SYM}.json; indexes use leading underscore (not needed for your list)
+    url = CBOE_URL.format(sym=sym.upper())
     last_err = None
-    for attempt in range(MAX_RETRIES):
+    for a in range(MAX_RETRIES):
         try:
-            return fn(*args, **kwargs)
-        except (YFRateLimitError,
-                requests.exceptions.ReadTimeout,
-                requests.exceptions.ConnectTimeout,
-                requests.exceptions.ConnectionError) as e:
-            last_err = e
-            print(f"[RATE-LIMIT/NET] {e.__class__.__name__} on {fn.__name__} (try {attempt+1}/{MAX_RETRIES})")
-            sleep_backoff(attempt)
+            r = requests.get(url, headers=UA, timeout=12)
+            if r.status_code in (429, 503):
+                last_err = Exception(f"{r.status_code} from Cboe")
+                backoff_sleep(a); continue
+            r.raise_for_status()
+            j = r.json()
+            # Data shape is either {"options":[...]} or {"data":{"options":[...]}}
+            opts = j.get("options")
+            if opts is None and isinstance(j.get("data"), dict):
+                opts = j["data"].get("options")
+            if not opts: return []
+            # normalize numeric fields and keep OPRA symbol
+            out = []
+            for o in opts:
+                # keys vary; handle both "last" and "last_trade_price"
+                last = o.get("last")
+                if last is None: last = o.get("last_trade_price")
+                out.append({
+                    "opra":     o.get("option") or o.get("symbol") or "",
+                    "bid":      _tofloat(o.get("bid")),
+                    "ask":      _tofloat(o.get("ask")),
+                    "last":     _tofloat(last),
+                })
+            return out
         except Exception as e:
             last_err = e
-            print(f"[WARN] {e.__class__.__name__} on {fn.__name__} (try {attempt+1}/{MAX_RETRIES})")
-            sleep_backoff(attempt)
-    print(f"[ERROR] Exhausted retries for {fn.__name__}: {last_err}")
-    return None
+            backoff_sleep(a)
+    print(f"[ERROR] Cboe fetch failed for {sym}: {last_err}")
+    return []
 
-def list_expiries(tk: yf.Ticker):
-    return with_retries(lambda: tk.options) or []
-
-def nearest_expiry(requested: str, avail: list[str]) -> str:
-    if requested in avail: return requested
+def _tofloat(x):
     try:
-        req = datetime.strptime(requested, "%Y-%m-%d").date()
-        if avail:
-            best = min(avail, key=lambda s: abs((datetime.strptime(s, "%Y-%m-%d").date() - req).days))
-            if best != requested:
-                print(f"[INFO] Mapped expiry: {requested} -> {best}")
-            return best
+        if x in (None, "", "NaN"): return float("nan")
+        return float(x)
     except Exception:
-        pass
-    return requested
+        return float("nan")
 
-def fetch_option_chain_both(tk: yf.Ticker, expiry: str):
-    def _pull(): return tk.option_chain(expiry)
-    oc = with_retries(_pull)
-    if not oc: return None, None
-    return oc.calls, oc.puts
+# OPRA parser: <root><YY><MM><DD><C|P><strike*1000 8-digits>
+OPRA_RE = re.compile(r"^(?P<root>[A-Z]{1,6})(?P<yy>\d{2})(?P<mm>\d{2})(?P<dd>\d{2})(?P<cp>[CP])(?P<strike>\d{8})$")
+
+def parse_opra(opra: str):
+    m = OPRA_RE.match(opra)
+    if not m: return None
+    yy = int(m.group("yy"))
+    year = 2000 + yy  # good till 2099
+    month = int(m.group("mm")); day = int(m.group("dd"))
+    cp = "call" if m.group("cp") == "C" else "put"
+    strike = int(m.group("strike")) / 1000.0
+    try:
+        exp = date(year, month, day).strftime("%Y-%m-%d")
+    except Exception:
+        return None
+    return {"expiry": exp, "type": cp, "strike": strike}
 
 def ensure_csv_headers():
     if not os.path.exists(HISTORY_CSV):
@@ -98,21 +114,17 @@ def ensure_csv_headers():
             f.write("date,total_value,total_cost_basis,total_pnl\n")
 
 def replace_today(file_path: str, header_line: str, date_str: str):
-    """Rewrite CSV removing rows for date_str, preserving header."""
     if not os.path.exists(file_path):
         with open(file_path, "w", encoding="utf-8") as f:
-            f.write(header_line)
-        return
+            f.write(header_line); return
     with open(file_path, "r", encoding="utf-8") as f:
         lines = f.read().splitlines()
-    if not lines:
-        lines = [header_line.strip()]
+    if not lines: lines = [header_line.strip()]
     head = lines[0]
     body = [ln for ln in lines[1:] if not ln.startswith(date_str + ",")]
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(head + ("\n" if not head.endswith("\n") else ""))
-        for ln in body:
-            f.write(ln + "\n")
+        for ln in body: f.write(ln + "\n")
 
 def append_history(rows):
     with open(HISTORY_CSV, "a", encoding="utf-8") as f:
@@ -123,8 +135,21 @@ def append_portfolio(date_str, total_value, total_cost, total_pnl):
     with open(PORTFOLIO_CSV, "a", encoding="utf-8") as f:
         f.write(f"{date_str},{total_value:.2f},{total_cost:.2f},{total_pnl:.2f}\n")
 
+def nearest(items, key_fn, target):
+    # find item minimizing abs(key(item) - target)
+    return min(items, key=lambda it: abs(key_fn(it) - target))
+
+def nearest_expiry(requested: str, expiries: list[str]) -> str:
+    if requested in expiries: return requested
+    try:
+        req = datetime.strptime(requested, "%Y-%m-%d").date()
+        dd = [datetime.strptime(e, "%Y-%m-%d").date() for e in expiries]
+        best = min(dd, key=lambda d: abs((d - req).days))
+        return best.strftime("%Y-%m-%d")
+    except Exception:
+        return requested
+
 def main():
-    # small stagger (skipped in FAST_MODE)
     if INITIAL_STAGGER_MAX > 0:
         time.sleep(random.uniform(0, INITIAL_STAGGER_MAX))
 
@@ -133,28 +158,22 @@ def main():
     ensure_csv_headers()
 
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    # de-dupe today's rows before appending
     replace_today(HISTORY_CSV, "date,symbolKey,underlying,expiry,type,strike,contracts,cost_per_contract,price,value,pnl,pnl_pct\n", date_str)
     replace_today(PORTFOLIO_CSV, "date,total_value,total_cost_basis,total_pnl\n", date_str)
 
-    # group positions by underlying
+    # group by underlying
     by_ul = {}
     for p in positions:
-        by_ul.setdefault(p["underlying"], []).append(p)
+        by_ul.setdefault(p["underlying"].upper(), []).append(p)
 
     total_value = 0.0
     total_cost  = 0.0
     history_rows = []
 
     for underlying, plist in by_ul.items():
-        tk = yf.Ticker(underlying)
-
-        # one call to list expiries for this underlying
-        avail = list_expiries(tk)
-        if not avail:
-            print(f"[WARN] No expiries available for {underlying} (rate limit or no options).")
-            # write zeros for this underlying’s positions but continue
+        raw = fetch_cboe_chain(underlying)
+        if not raw:
+            print(f"[WARN] No chain from Cboe for {underlying}")
             for pos in plist:
                 contracts = int(pos["contracts"])
                 cost_basis = float(pos["cost_per_contract"]) * contracts * 100.0
@@ -167,8 +186,8 @@ def main():
                     "strike": f"{float(pos['strike']):.2f}",
                     "contracts": str(contracts),
                     "cost_per_contract": f"{float(pos['cost_per_contract']):.2f}",
-                    "price": f"{0.0:.2f}",
-                    "value": f"{0.0:.2f}",
+                    "price": f"{0.00:.2f}",
+                    "value": f"{0.00:.2f}",
                     "pnl": f"{(-cost_basis):.2f}",
                     "pnl_pct": f"{(-100.0):.2f}" if cost_basis > 0 else "0.00",
                 })
@@ -176,39 +195,46 @@ def main():
             time.sleep(BETWEEN_UNDERLYINGS)
             continue
 
-        # map each requested expiry to nearest available
-        requested_exps = sorted({p["expiry"] for p in plist})
-        exp_map = {req: nearest_expiry(req, avail) for req in requested_exps}
+        # Parse OPRA, keep only well-formed rows
+        parsed = []
+        for r in raw:
+            opra = (r.get("opra") or "").strip().upper()
+            info = parse_opra(opra)
+            if not info: continue
+            parsed.append({
+                "expiry": info["expiry"],
+                "type": info["type"],  # "call"/"put"
+                "strike": float(info["strike"]),
+                "bid": r.get("bid"),
+                "ask": r.get("ask"),
+                "last": r.get("last"),
+            })
 
-        # fetch each USED expiry once (both calls & puts) and cache
-        chains = {}  # used_expiry -> (calls_df, puts_df)
-        for used_exp in sorted(set(exp_map.values())):
-            calls_df, puts_df = fetch_option_chain_both(tk, used_exp)
-            chains[used_exp] = (calls_df, puts_df)
+        # precompute all expiries available by type
+        expiries_by_type = {
+            "call": sorted({x["expiry"] for x in parsed if x["type"] == "call"}),
+            "put":  sorted({x["expiry"] for x in parsed if x["type"] == "put"}),
+        }
 
-        # now resolve each position from cached chains
         for pos in plist:
-            typ = pos["type"]
+            typ = pos["type"].lower()
             strike = float(pos["strike"])
             contracts = int(pos["contracts"])
             cost_per_contract = float(pos["cost_per_contract"])
+            req_exp = pos["expiry"]
 
-            used_exp = exp_map[pos["expiry"]]
-            calls_df, puts_df = chains.get(used_exp, (None, None))
-            df = calls_df if typ.lower().startswith("c") else puts_df
+            available = expiries_by_type.get(typ, [])
+            use_exp = nearest_expiry(req_exp, available) if available else req_exp
 
-            if df is None or df.empty:
-                print(f"[WARN] Empty chain for {underlying} {used_exp} {typ}")
+            candidates = [x for x in parsed if x["type"] == typ and x["expiry"] == use_exp]
+            if not candidates:
                 price = 0.0
             else:
-                # closest strike
-                df = df.copy()
-                df["strike_diff"] = (df["strike"] - strike).abs()
-                row = df.loc[df["strike_diff"].idxmin()]
-                used_strike = float(row["strike"])
-                if abs(used_strike - strike) > 0.02:
-                    print(f"[WARN] Closest strike for {underlying} {pos['expiry']} {typ} {strike} -> {used_strike} @ {used_exp}")
-                price = mark_price(row.get("bid"), row.get("ask"), row.get("lastPrice"))
+                # closest strike for that expiry
+                best = nearest(candidates, key_fn=lambda x: x["strike"], target=strike)
+                if abs(best["strike"] - strike) > 0.02:
+                    print(f"[WARN] {underlying} {req_exp} {typ} {strike} -> {best['strike']} @ {use_exp}")
+                price = mark_price(best.get("bid"), best.get("ask"), best.get("last"))
 
             value = price * contracts * 100.0
             cost_basis = cost_per_contract * contracts * 100.0
@@ -222,8 +248,8 @@ def main():
                 "date": date_str,
                 "symbolKey": symbol_key(pos),
                 "underlying": pos["underlying"],
-                "expiry": pos["expiry"],
-                "type": typ.lower(),
+                "expiry": req_exp,
+                "type": typ,
                 "strike": f"{strike:.2f}",
                 "contracts": str(contracts),
                 "cost_per_contract": f"{cost_per_contract:.2f}",
@@ -235,10 +261,8 @@ def main():
 
         time.sleep(BETWEEN_UNDERLYINGS)
 
-    # write results
     append_history(history_rows)
     append_portfolio(date_str, total_value, total_cost, total_value - total_cost)
-
     with open(LAST_RUN, "w", encoding="utf-8") as f:
         f.write(datetime.now(timezone.utc).isoformat())
 
