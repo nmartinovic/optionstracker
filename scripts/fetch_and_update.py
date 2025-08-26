@@ -1,10 +1,9 @@
-
 import os
 import json
 import math
 import time
-import pandas as pd
 from datetime import datetime, timezone
+import pandas as pd
 import yfinance as yf
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -22,41 +21,79 @@ def read_config(path: str):
         return json.load(f)
 
 def infer_symbol_key(pos):
-    # e.g. "AAPL 2025-09-19 C 200"
     t = "C" if pos["type"].lower().startswith("c") else "P"
     return f'{pos["underlying"]} {pos["expiry"]} {t} {pos["strike"]}'
 
 def mark_price(bid, ask, last_price):
-    # midpoint minus 0.05, floored at 0.00, fallback to lastPrice if bid/ask missing
-    if bid is not None and ask is not None and not (math.isnan(bid) or math.isnan(ask)):
+    if bid is not None and ask is not None and not (is_nan(bid) or is_nan(ask)):
         px = (float(bid) + float(ask)) / 2.0 - 0.05
     else:
-        # fallback to last price
-        if last_price is None or (isinstance(last_price, float) and math.isnan(last_price)):
+        if last_price is None or is_nan(last_price):
             return 0.0
         px = float(last_price) - 0.05
     return round(max(px, 0.0), 2)
 
-def fetch_option_row(underlying: str, expiry: str, typ: str, strike: float):
+def is_nan(x):
+    try:
+        return math.isnan(float(x))
+    except Exception:
+        return False
+
+def pick_expiry(tk: yf.Ticker, requested_expiry: str) -> str:
+    """Return the exact requested expiry if available; otherwise the nearest available expiry."""
+    avail = tk.options or []
+    if requested_expiry in avail:
+        return requested_expiry
+    try:
+        req = datetime.strptime(requested_expiry, "%Y-%m-%d").date()
+        if avail:
+            best = min(
+                avail,
+                key=lambda s: abs((datetime.strptime(s, "%Y-%m-%d").date() - req).days)
+            )
+            return best
+    except Exception:
+        pass
+    return requested_expiry  # fallback
+
+def fetch_option_row(underlying: str, requested_expiry: str, typ: str, strike: float):
     """
-    Returns dict with bid, ask, lastPrice for the specified contract using yfinance option_chain.
+    Fetches the option row using the nearest-matching expiry and closest strike.
+    Returns dict with bid, ask, lastPrice, used_expiry, used_strike.
     """
     tk = yf.Ticker(underlying)
+    used_expiry = pick_expiry(tk, requested_expiry)
+
     try:
-        chain = tk.option_chain(expiry)
+        chain = tk.option_chain(used_expiry)
         df = chain.calls if typ.lower().startswith("c") else chain.puts
-        row = df.loc[df["strike"] == float(strike)]
-        if row.empty:
+        if df is None or df.empty:
+            print(f"[WARN] Empty chain for {underlying} {used_expiry} {typ}")
             return None
-        row = row.iloc[0]
+
+        df = df.copy()
+        df["strike_diff"] = (df["strike"] - float(strike)).abs()
+        row = df.loc[df["strike_diff"].idxmin()]
+        used_strike = float(row["strike"])
+
+        # small sanity tolerance (0.02 covers .01 tick and float issues)
+        if abs(used_strike - float(strike)) > 0.02:
+            print(f"[WARN] Closest strike for {underlying} {requested_expiry} {typ} {strike} "
+                  f"is {used_strike} at expiry {used_expiry} (requested not found).")
+
         out = {
             "bid": float(row.get("bid", float("nan"))),
             "ask": float(row.get("ask", float("nan"))),
-            "lastPrice": float(row.get("lastPrice", float("nan")))
+            "lastPrice": float(row.get("lastPrice", float("nan"))),
+            "used_expiry": used_expiry,
+            "used_strike": used_strike,
         }
+        if used_expiry != requested_expiry:
+            print(f"[INFO] Mapped expiry for {underlying}: requested {requested_expiry} -> used {used_expiry}")
         return out
+
     except Exception as e:
-        print(f"Error fetching {underlying} {expiry} {typ} {strike}: {e}")
+        print(f"[ERROR] Fetch {underlying} {requested_expiry} {typ} {strike}: {e}")
         return None
 
 def ensure_csv_headers():
@@ -68,14 +105,9 @@ def ensure_csv_headers():
             f.write("date,total_value,total_cost_basis,total_pnl\n")
 
 def append_history(rows):
-    # rows: list of dicts
     with open(HISTORY_CSV, "a", encoding="utf-8") as f:
         for r in rows:
-            f.write(
-                "{date},{symbolKey},{underlying},{expiry},{type},{strike},{contracts},{cost_per_contract},{price},{value},{pnl},{pnl_pct}\n".format(
-                    **r
-                )
-            )
+            f.write("{date},{symbolKey},{underlying},{expiry},{type},{strike},{contracts},{cost_per_contract},{price},{value},{pnl},{pnl_pct}\n".format(**r))
 
 def append_portfolio(date_str, total_value, total_cost, total_pnl):
     with open(PORTFOLIO_CSV, "a", encoding="utf-8") as f:
@@ -86,7 +118,6 @@ def main():
     positions = cfg.get("positions", [])
     ensure_csv_headers()
 
-    # Use UTC date for the daily record
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     history_rows = []
 
@@ -103,7 +134,6 @@ def main():
 
         info = fetch_option_row(underlying, expiry, typ, strike)
         if info is None:
-            # write zeroes but keep the row so you can spot missing contracts
             price = 0.0
         else:
             price = mark_price(info.get("bid"), info.get("ask"), info.get("lastPrice"))
@@ -118,7 +148,7 @@ def main():
 
         row = {
             "date": date_str,
-            "symbolKey": (f"{underlying} {expiry} " + ("C" if typ.lower().startswith("c") else "P") + f" {strike}"),
+            "symbolKey": infer_symbol_key(pos),  # keep the user-requested key
             "underlying": underlying,
             "expiry": expiry,
             "type": typ.lower(),
@@ -132,10 +162,8 @@ def main():
         }
         history_rows.append(row)
 
-        # tiny delay
-        time.sleep(0.2)
+        time.sleep(0.2)  # be polite
 
-    # Append rows (no duplicate check; time series by date)
     append_history(history_rows)
     total_pnl = total_value - total_cost
     append_portfolio(date_str, total_value, total_cost, total_pnl)
