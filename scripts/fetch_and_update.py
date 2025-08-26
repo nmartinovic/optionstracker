@@ -15,7 +15,7 @@ HISTORY_CSV   = os.path.join(DOCS_DATA, "history.csv")
 PORTFOLIO_CSV = os.path.join(DOCS_DATA, "portfolio.csv")
 LAST_RUN      = os.path.join(DOCS_DATA, "last_run.txt")
 
-# ---------- knobs (faster on manual runs) ----------
+# ---------- knobs ----------
 FAST_MODE = os.getenv("FAST_MODE") == "1" or os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
 MAX_RETRIES        = 3 if FAST_MODE else 5
 BASE_SLEEP         = 0.8 if FAST_MODE else 1.2
@@ -23,25 +23,26 @@ JITTER             = 0.4
 BETWEEN_UNDERLYINGS= 0.3 if FAST_MODE else 0.8
 INITIAL_STAGGER_MAX= 0.0 if FAST_MODE else 6.0
 
-def read_config(path: str):
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-def infer_symbol_key(pos):
-    t = "C" if pos["type"].lower().startswith("c") else "P"
-    return f'{pos["underlying"]} {pos["expiry"]} {t} {pos["strike"]}'
-
 def is_nan(x):
     try: return math.isnan(float(x))
     except Exception: return False
 
 def mark_price(bid, ask, last_price):
+    # midpoint minus 0.05, floored at 0.00; fallback to lastPrice
     if bid is not None and ask is not None and not (is_nan(bid) or is_nan(ask)):
         px = (float(bid) + float(ask)) / 2.0 - 0.05
     else:
         if last_price is None or is_nan(last_price): return 0.0
         px = float(last_price) - 0.05
     return round(max(px, 0.0), 2)
+
+def read_config(path: str):
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def symbol_key(pos):
+    t = "C" if pos["type"].lower().startswith("c") else "P"
+    return f'{pos["underlying"]} {pos["expiry"]} {t} {pos["strike"]}'
 
 def sleep_backoff(attempt: int):
     delay = (BASE_SLEEP * (2 ** attempt)) + random.uniform(-JITTER, JITTER)
@@ -69,50 +70,24 @@ def with_retries(fn, *args, **kwargs):
 def list_expiries(tk: yf.Ticker):
     return with_retries(lambda: tk.options) or []
 
-def pick_expiry(tk: yf.Ticker, requested_expiry: str) -> str:
-    avail = list_expiries(tk)
-    if requested_expiry in avail:
-        return requested_expiry
+def nearest_expiry(requested: str, avail: list[str]) -> str:
+    if requested in avail: return requested
     try:
-        req = datetime.strptime(requested_expiry, "%Y-%m-%d").date()
+        req = datetime.strptime(requested, "%Y-%m-%d").date()
         if avail:
-            best = min(
-                avail,
-                key=lambda s: abs((datetime.strptime(s, "%Y-%m-%d").date() - req).days)
-            )
-            if best != requested_expiry:
-                print(f"[INFO] Mapped expiry: {requested_expiry} -> {best}")
+            best = min(avail, key=lambda s: abs((datetime.strptime(s, "%Y-%m-%d").date() - req).days))
+            if best != requested:
+                print(f"[INFO] Mapped expiry: {requested} -> {best}")
             return best
     except Exception:
         pass
-    return requested_expiry
+    return requested
 
-def fetch_chain(tk: yf.Ticker, expiry: str, call_or_put: str):
-    def _pull():
-        chain = tk.option_chain(expiry)
-        return chain.calls if call_or_put.lower().startswith("c") else chain.puts
-    return with_retries(_pull)
-
-def fetch_option_row(underlying: str, requested_expiry: str, typ: str, strike: float):
-    tk = yf.Ticker(underlying)
-    used_expiry = pick_expiry(tk, requested_expiry)
-    df = fetch_chain(tk, used_expiry, typ)
-    if df is None or df.empty:
-        print(f"[WARN] Empty chain for {underlying} {used_expiry} {typ}")
-        return None
-    df = df.copy()
-    df["strike_diff"] = (df["strike"] - float(strike)).abs()
-    row = df.loc[df["strike_diff"].idxmin()]
-    used_strike = float(row["strike"])
-    if abs(used_strike - float(strike)) > 0.02:
-        print(f"[WARN] Closest strike for {underlying} {requested_expiry} {typ} {strike} -> {used_strike} @ {used_expiry}")
-    return {
-        "bid": float(row.get("bid", float("nan"))),
-        "ask": float(row.get("ask", float("nan"))),
-        "lastPrice": float(row.get("lastPrice", float("nan"))),
-        "used_expiry": used_expiry,
-        "used_strike": used_strike,
-    }
+def fetch_option_chain_both(tk: yf.Ticker, expiry: str):
+    def _pull(): return tk.option_chain(expiry)
+    oc = with_retries(_pull)
+    if not oc: return None, None
+    return oc.calls, oc.puts
 
 def ensure_csv_headers():
     if not os.path.exists(HISTORY_CSV):
@@ -149,7 +124,7 @@ def append_portfolio(date_str, total_value, total_cost, total_pnl):
         f.write(f"{date_str},{total_value:.2f},{total_cost:.2f},{total_pnl:.2f}\n")
 
 def main():
-    # small random stagger (skipped in FAST_MODE)
+    # small stagger (skipped in FAST_MODE)
     if INITIAL_STAGGER_MAX > 0:
         time.sleep(random.uniform(0, INITIAL_STAGGER_MAX))
 
@@ -159,29 +134,81 @@ def main():
 
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    # --- de-dupe today's rows before appending ---
+    # de-dupe today's rows before appending
     replace_today(HISTORY_CSV, "date,symbolKey,underlying,expiry,type,strike,contracts,cost_per_contract,price,value,pnl,pnl_pct\n", date_str)
     replace_today(PORTFOLIO_CSV, "date,total_value,total_cost_basis,total_pnl\n", date_str)
 
-    history_rows = []
+    # group positions by underlying
+    by_ul = {}
+    for p in positions:
+        by_ul.setdefault(p["underlying"], []).append(p)
+
     total_value = 0.0
     total_cost  = 0.0
+    history_rows = []
 
-    # group by underlying to pace calls
-    by_underlying = {}
-    for pos in positions:
-        by_underlying.setdefault(pos["underlying"], []).append(pos)
+    for underlying, plist in by_ul.items():
+        tk = yf.Ticker(underlying)
 
-    for underlying, plist in by_underlying.items():
+        # one call to list expiries for this underlying
+        avail = list_expiries(tk)
+        if not avail:
+            print(f"[WARN] No expiries available for {underlying} (rate limit or no options).")
+            # write zeros for this underlying’s positions but continue
+            for pos in plist:
+                contracts = int(pos["contracts"])
+                cost_basis = float(pos["cost_per_contract"]) * contracts * 100.0
+                history_rows.append({
+                    "date": date_str,
+                    "symbolKey": symbol_key(pos),
+                    "underlying": pos["underlying"],
+                    "expiry": pos["expiry"],
+                    "type": pos["type"].lower(),
+                    "strike": f"{float(pos['strike']):.2f}",
+                    "contracts": str(contracts),
+                    "cost_per_contract": f"{float(pos['cost_per_contract']):.2f}",
+                    "price": f"{0.0:.2f}",
+                    "value": f"{0.0:.2f}",
+                    "pnl": f"{(-cost_basis):.2f}",
+                    "pnl_pct": f"{(-100.0):.2f}" if cost_basis > 0 else "0.00",
+                })
+                total_cost += cost_basis
+            time.sleep(BETWEEN_UNDERLYINGS)
+            continue
+
+        # map each requested expiry to nearest available
+        requested_exps = sorted({p["expiry"] for p in plist})
+        exp_map = {req: nearest_expiry(req, avail) for req in requested_exps}
+
+        # fetch each USED expiry once (both calls & puts) and cache
+        chains = {}  # used_expiry -> (calls_df, puts_df)
+        for used_exp in sorted(set(exp_map.values())):
+            calls_df, puts_df = fetch_option_chain_both(tk, used_exp)
+            chains[used_exp] = (calls_df, puts_df)
+
+        # now resolve each position from cached chains
         for pos in plist:
-            expiry = pos["expiry"]
             typ = pos["type"]
             strike = float(pos["strike"])
             contracts = int(pos["contracts"])
             cost_per_contract = float(pos["cost_per_contract"])
 
-            info = fetch_option_row(underlying, expiry, typ, strike)
-            price = 0.0 if info is None else mark_price(info.get("bid"), info.get("ask"), info.get("lastPrice"))
+            used_exp = exp_map[pos["expiry"]]
+            calls_df, puts_df = chains.get(used_exp, (None, None))
+            df = calls_df if typ.lower().startswith("c") else puts_df
+
+            if df is None or df.empty:
+                print(f"[WARN] Empty chain for {underlying} {used_exp} {typ}")
+                price = 0.0
+            else:
+                # closest strike
+                df = df.copy()
+                df["strike_diff"] = (df["strike"] - strike).abs()
+                row = df.loc[df["strike_diff"].idxmin()]
+                used_strike = float(row["strike"])
+                if abs(used_strike - strike) > 0.02:
+                    print(f"[WARN] Closest strike for {underlying} {pos['expiry']} {typ} {strike} -> {used_strike} @ {used_exp}")
+                price = mark_price(row.get("bid"), row.get("ask"), row.get("lastPrice"))
 
             value = price * contracts * 100.0
             cost_basis = cost_per_contract * contracts * 100.0
@@ -193,9 +220,9 @@ def main():
 
             history_rows.append({
                 "date": date_str,
-                "symbolKey": infer_symbol_key(pos),
+                "symbolKey": symbol_key(pos),
                 "underlying": pos["underlying"],
-                "expiry": expiry,
+                "expiry": pos["expiry"],
                 "type": typ.lower(),
                 "strike": f"{strike:.2f}",
                 "contracts": str(contracts),
@@ -208,6 +235,7 @@ def main():
 
         time.sleep(BETWEEN_UNDERLYINGS)
 
+    # write results
     append_history(history_rows)
     append_portfolio(date_str, total_value, total_cost, total_value - total_cost)
 
