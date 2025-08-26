@@ -18,14 +18,6 @@
       "cost_per_contract": 35.5
     },
     {
-      "underlying": "COOK",
-      "expiry": "2025-09-19",
-      "type": "call",
-      "strike": 3,
-      "contracts": 4,
-      "cost_per_contract": 0.3375
-    },
-    {
       "underlying": "DPZ",
       "expiry": "2027-01-15",
       "type": "call",

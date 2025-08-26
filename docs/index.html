@@ -1,4 +1,3 @@
-
 <!doctype html>
 <html lang="en">
   <head>
@@ -15,6 +14,22 @@
       <h1>📈 Options Tracker</h1>
       <p class="muted">Midpoint − $0.05 per contract, floored at $0.00. Updated daily.</p>
       <p id="last-run" class="muted">Last update: …</p>
+
+      <!-- Top-level stats -->
+      <section class="stats card">
+        <div class="stat">
+          <div class="label">Total Value</div>
+          <div id="stat-total-value" class="value">—</div>
+        </div>
+        <div class="stat">
+          <div class="label">Total Return ($)</div>
+          <div id="stat-total-pnl" class="value">—</div>
+        </div>
+        <div class="stat">
+          <div class="label">Total Return (%)</div>
+          <div id="stat-total-pct" class="value">—</div>
+        </div>
+      </section>
     </header>
 
     <main class="container">
@@ -45,7 +60,7 @@
     </main>
 
     <footer class="container muted small">
-      <p>Data from Yahoo Finance via yfinance. For personal use only.</p>
+      <p>Data via Cboe delayed options feed (server-side). For personal use only.</p>
     </footer>
 
     <script src="./app.js"></script>

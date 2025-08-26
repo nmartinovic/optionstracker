@@ -1,4 +1,3 @@
-
 async function fetchText(path) {
   const res = await fetch(path, { cache: "no-cache" });
   if (!res.ok) return "";
@@ -39,6 +38,38 @@ async function loadLastRun() {
   }
 }
 
+// NEW: load top-level stats
+async function loadStats() {
+  const text = await fetchText("./data/portfolio.csv");
+  const { rows } = parseCSV(text);
+  if (!rows.length) return;
+
+  rows.sort(byDateAsc);
+  const latest = rows[rows.length - 1];
+
+  const totalValue = parseFloat(latest.total_value);
+  const totalCost  = parseFloat(latest.total_cost_basis);
+  const totalPnl   = parseFloat(latest.total_pnl);
+  const totalPct   = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
+
+  const vEl = document.getElementById("stat-total-value");
+  const pEl = document.getElementById("stat-total-pnl");
+  const pctEl = document.getElementById("stat-total-pct");
+
+  if (vEl) vEl.textContent = fmtUsd(totalValue);
+  if (pEl) {
+    pEl.textContent = fmtUsd(totalPnl);
+    pEl.classList.toggle("good", totalPnl >= 0);
+    pEl.classList.toggle("bad", totalPnl < 0);
+  }
+  if (pctEl) {
+    const txt = isFinite(totalPct) ? totalPct.toFixed(2) + "%" : "-";
+    pctEl.textContent = txt;
+    pctEl.classList.toggle("good", totalPct >= 0);
+    pctEl.classList.toggle("bad", totalPct < 0);
+  }
+}
+
 async function loadPortfolioChart() {
   const text = await fetchText("./data/portfolio.csv");
   const { rows } = parseCSV(text);
@@ -60,10 +91,12 @@ async function loadPortfolioChart() {
     },
     options: {
       responsive: true,
+      maintainAspectRatio: false,
       scales: {
-        y: {
-          beginAtZero: false
-        }
+        y: { beginAtZero: false }
+      },
+      elements: {
+        line: { tension: 0.25 }
       }
     }
   });
@@ -100,6 +133,11 @@ async function loadPositionsTable() {
 }
 
 async function init() {
-  await Promise.all([loadLastRun(), loadPortfolioChart(), loadPositionsTable()]);
+  await Promise.all([
+    loadLastRun(),
+    loadStats(),            // added
+    loadPortfolioChart(),
+    loadPositionsTable()
+  ]);
 }
 init();
