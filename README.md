@@ -6,6 +6,7 @@ A simple static site that tracks the *marked* value of your options portfolio da
 - Automatically updates daily via GitHub Actions.
 - Price = midpoint between bid/ask minus $0.05, floored at $0.00.
 
+
 ## Quick Start
 
 1. **Create a new GitHub repo** and upload this folder's contents.
