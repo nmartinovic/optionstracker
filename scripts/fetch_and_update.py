@@ -1,8 +1,4 @@
-import os
-import json
-import math
-import time
-import random
+import os, json, math, time, random
 from datetime import datetime, timezone
 import pandas as pd
 import yfinance as yf
@@ -15,16 +11,17 @@ CONFIG_PATH = os.path.join(ROOT, "config", "options.json")
 
 os.makedirs(DOCS_DATA, exist_ok=True)
 
-HISTORY_CSV = os.path.join(DOCS_DATA, "history.csv")
+HISTORY_CSV   = os.path.join(DOCS_DATA, "history.csv")
 PORTFOLIO_CSV = os.path.join(DOCS_DATA, "portfolio.csv")
-LAST_RUN = os.path.join(DOCS_DATA, "last_run.txt")
+LAST_RUN      = os.path.join(DOCS_DATA, "last_run.txt")
 
-# --- Tuning knobs ---
-MAX_RETRIES = 6                 # total attempts for each Yahoo call
-BASE_SLEEP = 1.5                # base backoff seconds
-JITTER = 0.75                   # +/- jitter added to sleep
-BETWEEN_UNDERLYINGS = 1.0       # pause between different tickers
-INITIAL_STAGGER_MAX = 8.0       # random stagger at job start to avoid dogpiles
+# ---------- knobs (faster on manual runs) ----------
+FAST_MODE = os.getenv("FAST_MODE") == "1" or os.getenv("GITHUB_EVENT_NAME") == "workflow_dispatch"
+MAX_RETRIES        = 3 if FAST_MODE else 5
+BASE_SLEEP         = 0.8 if FAST_MODE else 1.2
+JITTER             = 0.4
+BETWEEN_UNDERLYINGS= 0.3 if FAST_MODE else 0.8
+INITIAL_STAGGER_MAX= 0.0 if FAST_MODE else 6.0
 
 def read_config(path: str):
     with open(path, "r", encoding="utf-8") as f:
@@ -35,25 +32,20 @@ def infer_symbol_key(pos):
     return f'{pos["underlying"]} {pos["expiry"]} {t} {pos["strike"]}'
 
 def is_nan(x):
-    try:
-        return math.isnan(float(x))
-    except Exception:
-        return False
+    try: return math.isnan(float(x))
+    except Exception: return False
 
 def mark_price(bid, ask, last_price):
-    # midpoint minus 0.05, floored at 0.00, fallback to lastPrice if bid/ask missing
     if bid is not None and ask is not None and not (is_nan(bid) or is_nan(ask)):
         px = (float(bid) + float(ask)) / 2.0 - 0.05
     else:
-        if last_price is None or is_nan(last_price):
-            return 0.0
+        if last_price is None or is_nan(last_price): return 0.0
         px = float(last_price) - 0.05
     return round(max(px, 0.0), 2)
 
 def sleep_backoff(attempt: int):
-    # exponential backoff with jitter
     delay = (BASE_SLEEP * (2 ** attempt)) + random.uniform(-JITTER, JITTER)
-    time.sleep(max(0.25, delay))
+    time.sleep(max(0.2, delay))
 
 def with_retries(fn, *args, **kwargs):
     last_err = None
@@ -65,22 +57,19 @@ def with_retries(fn, *args, **kwargs):
                 requests.exceptions.ConnectTimeout,
                 requests.exceptions.ConnectionError) as e:
             last_err = e
-            print(f"[RATE-LIMIT/NET] {e.__class__.__name__} on {fn.__name__}, attempt {attempt+1}/{MAX_RETRIES}. Backing off…")
+            print(f"[RATE-LIMIT/NET] {e.__class__.__name__} on {fn.__name__} (try {attempt+1}/{MAX_RETRIES})")
             sleep_backoff(attempt)
         except Exception as e:
-            # other transient issues: retry a couple times, then give up
             last_err = e
-            print(f"[WARN] {e.__class__.__name__} on {fn.__name__}, attempt {attempt+1}/{MAX_RETRIES}.")
+            print(f"[WARN] {e.__class__.__name__} on {fn.__name__} (try {attempt+1}/{MAX_RETRIES})")
             sleep_backoff(attempt)
     print(f"[ERROR] Exhausted retries for {fn.__name__}: {last_err}")
     return None
 
 def list_expiries(tk: yf.Ticker):
-    # tk.options triggers a request; wrap it
     return with_retries(lambda: tk.options) or []
 
 def pick_expiry(tk: yf.Ticker, requested_expiry: str) -> str:
-    """Return the exact requested expiry if available; otherwise nearest available expiry."""
     avail = list_expiries(tk)
     if requested_expiry in avail:
         return requested_expiry
@@ -92,7 +81,7 @@ def pick_expiry(tk: yf.Ticker, requested_expiry: str) -> str:
                 key=lambda s: abs((datetime.strptime(s, "%Y-%m-%d").date() - req).days)
             )
             if best != requested_expiry:
-                print(f"[INFO] Mapped expiry: requested {requested_expiry} -> used {best}")
+                print(f"[INFO] Mapped expiry: {requested_expiry} -> {best}")
             return best
     except Exception:
         pass
@@ -105,26 +94,18 @@ def fetch_chain(tk: yf.Ticker, expiry: str, call_or_put: str):
     return with_retries(_pull)
 
 def fetch_option_row(underlying: str, requested_expiry: str, typ: str, strike: float):
-    """
-    Fetch the option row using nearest-matching expiry and closest strike.
-    Returns dict with bid, ask, lastPrice, used_expiry, used_strike.
-    """
     tk = yf.Ticker(underlying)
     used_expiry = pick_expiry(tk, requested_expiry)
     df = fetch_chain(tk, used_expiry, typ)
     if df is None or df.empty:
         print(f"[WARN] Empty chain for {underlying} {used_expiry} {typ}")
         return None
-
     df = df.copy()
     df["strike_diff"] = (df["strike"] - float(strike)).abs()
     row = df.loc[df["strike_diff"].idxmin()]
     used_strike = float(row["strike"])
-
     if abs(used_strike - float(strike)) > 0.02:
-        print(f"[WARN] Closest strike for {underlying} {requested_expiry} {typ} {strike} "
-              f"is {used_strike} at expiry {used_expiry} (requested not found).")
-
+        print(f"[WARN] Closest strike for {underlying} {requested_expiry} {typ} {strike} -> {used_strike} @ {used_expiry}")
     return {
         "bid": float(row.get("bid", float("nan"))),
         "ask": float(row.get("ask", float("nan"))),
@@ -141,6 +122,23 @@ def ensure_csv_headers():
         with open(PORTFOLIO_CSV, "w", encoding="utf-8") as f:
             f.write("date,total_value,total_cost_basis,total_pnl\n")
 
+def replace_today(file_path: str, header_line: str, date_str: str):
+    """Rewrite CSV removing rows for date_str, preserving header."""
+    if not os.path.exists(file_path):
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(header_line)
+        return
+    with open(file_path, "r", encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    if not lines:
+        lines = [header_line.strip()]
+    head = lines[0]
+    body = [ln for ln in lines[1:] if not ln.startswith(date_str + ",")]
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(head + ("\n" if not head.endswith("\n") else ""))
+        for ln in body:
+            f.write(ln + "\n")
+
 def append_history(rows):
     with open(HISTORY_CSV, "a", encoding="utf-8") as f:
         for r in rows:
@@ -151,18 +149,23 @@ def append_portfolio(date_str, total_value, total_cost, total_pnl):
         f.write(f"{date_str},{total_value:.2f},{total_cost:.2f},{total_pnl:.2f}\n")
 
 def main():
-    # small stagger so we don't hit Yahoo at the exact top of the minute
-    time.sleep(random.uniform(0, INITIAL_STAGGER_MAX))
+    # small random stagger (skipped in FAST_MODE)
+    if INITIAL_STAGGER_MAX > 0:
+        time.sleep(random.uniform(0, INITIAL_STAGGER_MAX))
 
     cfg = read_config(CONFIG_PATH)
     positions = cfg.get("positions", [])
     ensure_csv_headers()
 
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    history_rows = []
 
+    # --- de-dupe today's rows before appending ---
+    replace_today(HISTORY_CSV, "date,symbolKey,underlying,expiry,type,strike,contracts,cost_per_contract,price,value,pnl,pnl_pct\n", date_str)
+    replace_today(PORTFOLIO_CSV, "date,total_value,total_cost_basis,total_pnl\n", date_str)
+
+    history_rows = []
     total_value = 0.0
-    total_cost = 0.0
+    total_cost  = 0.0
 
     # group by underlying to pace calls
     by_underlying = {}
@@ -178,10 +181,7 @@ def main():
             cost_per_contract = float(pos["cost_per_contract"])
 
             info = fetch_option_row(underlying, expiry, typ, strike)
-            if info is None:
-                price = 0.0
-            else:
-                price = mark_price(info.get("bid"), info.get("ask"), info.get("lastPrice"))
+            price = 0.0 if info is None else mark_price(info.get("bid"), info.get("ask"), info.get("lastPrice"))
 
             value = price * contracts * 100.0
             cost_basis = cost_per_contract * contracts * 100.0
@@ -189,12 +189,12 @@ def main():
             pnl_pct = (pnl / cost_basis * 100.0) if cost_basis > 0 else 0.0
 
             total_value += value
-            total_cost += cost_basis
+            total_cost  += cost_basis
 
-            row = {
+            history_rows.append({
                 "date": date_str,
-                "symbolKey": infer_symbol_key(pos),  # keep your requested key
-                "underlying": underlying,
+                "symbolKey": infer_symbol_key(pos),
+                "underlying": pos["underlying"],
                 "expiry": expiry,
                 "type": typ.lower(),
                 "strike": f"{strike:.2f}",
@@ -204,15 +204,12 @@ def main():
                 "value": f"{value:.2f}",
                 "pnl": f"{pnl:.2f}",
                 "pnl_pct": f"{pnl_pct:.2f}",
-            }
-            history_rows.append(row)
+            })
 
-        # pause between different underlyings
         time.sleep(BETWEEN_UNDERLYINGS)
 
     append_history(history_rows)
-    total_pnl = total_value - total_cost
-    append_portfolio(date_str, total_value, total_cost, total_pnl)
+    append_portfolio(date_str, total_value, total_cost, total_value - total_cost)
 
     with open(LAST_RUN, "w", encoding="utf-8") as f:
         f.write(datetime.now(timezone.utc).isoformat())

@@ -31,8 +31,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Run fetch script
-        run: |
-          python scripts/fetch_and_update.py
+        env:
+          FAST_MODE: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+        run: python scripts/fetch_and_update.py
       - name: Commit changes
         run: |
           git config user.name "github-actions[bot]"
@@ -44,3 +45,4 @@ jobs:
           else
             echo "No changes to commit."
           fi
+
