@@ -38,7 +38,7 @@ async function loadLastRun() {
   }
 }
 
-// NEW: load top-level stats
+// Top-level stats
 async function loadStats() {
   const text = await fetchText("./data/portfolio.csv");
   const { rows } = parseCSV(text);
@@ -73,11 +73,18 @@ async function loadStats() {
 async function loadPortfolioChart() {
   const text = await fetchText("./data/portfolio.csv");
   const { rows } = parseCSV(text);
+  if (!rows.length) return;
+
   rows.sort(byDateAsc);
 
-  const labels = rows.map(r => r.date);
+  const labels     = rows.map(r => r.date);
   const totalValue = rows.map(r => parseFloat(r.total_value));
-  const totalPnl = rows.map(r => parseFloat(r.total_pnl));
+  const totalPnl   = rows.map(r => parseFloat(r.total_pnl));
+  const totalPct   = rows.map(r => {
+    const c = parseFloat(r.total_cost_basis);
+    const p = parseFloat(r.total_pnl);
+    return c > 0 ? (p / c) * 100 : 0;
+  });
 
   const ctx = document.getElementById("portfolioChart").getContext("2d");
   const chart = new Chart(ctx, {
@@ -85,18 +92,39 @@ async function loadPortfolioChart() {
     data: {
       labels,
       datasets: [
-        { label: "Total Value", data: totalValue },
-        { label: "Total P&L", data: totalPnl }
+        { label: "Total Value", data: totalValue, yAxisID: "y" },
+        { label: "Total P&L",   data: totalPnl,   yAxisID: "y" },
+        { label: "Total Return (%)", data: totalPct, yAxisID: "yPct", borderDash: [6, 4], pointRadius: 2 }
       ]
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      elements: { line: { tension: 0.25 } },
       scales: {
-        y: { beginAtZero: false }
+        y: {
+          title: { display: true, text: "USD" },
+          beginAtZero: false
+        },
+        yPct: {
+          position: "right",
+          title: { display: true, text: "% Return" },
+          grid: { drawOnChartArea: false },
+          ticks: { callback: v => `${v}%` }
+        }
       },
-      elements: {
-        line: { tension: 0.25 }
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const ds = ctx.dataset.label || "";
+              const v = ctx.parsed.y;
+              if (ctx.dataset.yAxisID === "yPct") return `${ds}: ${v.toFixed(2)}%`;
+              return `${ds}: ${fmtUsd(v)}`;
+            }
+          }
+        }
       }
     }
   });
@@ -107,7 +135,6 @@ async function loadPositionsTable() {
   const { rows } = parseCSV(text);
   if (!rows.length) return;
 
-  // pick the latest date's rows
   rows.sort(byDateAsc);
   const latestDate = rows[rows.length - 1].date;
   const todays = rows.filter(r => r.date === latestDate);
@@ -135,7 +162,7 @@ async function loadPositionsTable() {
 async function init() {
   await Promise.all([
     loadLastRun(),
-    loadStats(),            // added
+    loadStats(),
     loadPortfolioChart(),
     loadPositionsTable()
   ]);
