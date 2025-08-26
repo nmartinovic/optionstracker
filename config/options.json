@@ -1,0 +1,101 @@
+{
+  "base_currency": "USD",
+  "positions": [
+    {
+      "underlying": "CB",
+      "expiry": "2027-01-15",
+      "type": "call",
+      "strike": 300,
+      "contracts": 1,
+      "cost_per_contract": 42.7
+    },
+    {
+      "underlying": "COF",
+      "expiry": "2027-01-15",
+      "type": "call",
+      "strike": 160,
+      "contracts": 1,
+      "cost_per_contract": 35.5
+    },
+    {
+      "underlying": "COOK",
+      "expiry": "2025-09-19",
+      "type": "call",
+      "strike": 3,
+      "contracts": 4,
+      "cost_per_contract": 0.3375
+    },
+    {
+      "underlying": "DPZ",
+      "expiry": "2027-01-15",
+      "type": "call",
+      "strike": 580,
+      "contracts": 1,
+      "cost_per_contract": 37.6
+    },
+    {
+      "underlying": "HD",
+      "expiry": "2027-01-15",
+      "type": "call",
+      "strike": 420,
+      "contracts": 1,
+      "cost_per_contract": 25.95
+    },
+    {
+      "underlying": "JNJ",
+      "expiry": "2027-01-15",
+      "type": "call",
+      "strike": 155,
+      "contracts": 1,
+      "cost_per_contract": 22.7
+    },
+    {
+      "underlying": "MCD",
+      "expiry": "2027-01-15",
+      "type": "call",
+      "strike": 340,
+      "contracts": 1,
+      "cost_per_contract": 24.7
+    },
+    {
+      "underlying": "MWA",
+      "expiry": "2026-02-20",
+      "type": "call",
+      "strike": 22.5,
+      "contracts": 5,
+      "cost_per_contract": 3.91
+    },
+    {
+      "underlying": "NGD",
+      "expiry": "2027-01-15",
+      "type": "call",
+      "strike": 3,
+      "contracts": 10,
+      "cost_per_contract": 1.15
+    },
+    {
+      "underlying": "ORCL",
+      "expiry": "2027-01-15",
+      "type": "call",
+      "strike": 130,
+      "contracts": 1,
+      "cost_per_contract": 44.2
+    },
+    {
+      "underlying": "RSVR",
+      "expiry": "2026-01-16",
+      "type": "call",
+      "strike": 5,
+      "contracts": 11,
+      "cost_per_contract": 2.72
+    },
+    {
+      "underlying": "TSLA",
+      "expiry": "2027-06-17",
+      "type": "call",
+      "strike": 800,
+      "contracts": 1,
+      "cost_per_contract": 22.95
+    }
+  ]
+}

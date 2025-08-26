@@ -1,0 +1,53 @@
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Options Tracker</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+    <link rel="preconnect" href="https://unpkg.com" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header class="container">
+      <h1>📈 Options Tracker</h1>
+      <p class="muted">Midpoint − $0.05 per contract, floored at $0.00. Updated daily.</p>
+      <p id="last-run" class="muted">Last update: …</p>
+    </header>
+
+    <main class="container">
+      <section class="card">
+        <h2>Portfolio Value &amp; P&amp;L Over Time</h2>
+        <canvas id="portfolioChart"></canvas>
+      </section>
+
+      <section class="card">
+        <h2>Today’s Positions</h2>
+        <div class="table-wrap">
+          <table id="positions-table">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Contracts</th>
+                <th>Cost/Contract</th>
+                <th>Marked Price</th>
+                <th>Value</th>
+                <th>P&amp;L</th>
+                <th>P&amp;L %</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <footer class="container muted small">
+      <p>Data from Yahoo Finance via yfinance. For personal use only.</p>
+    </footer>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
