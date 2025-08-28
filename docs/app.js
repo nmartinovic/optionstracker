@@ -1,3 +1,8 @@
+let portfolioChart = null;
+let portfolioRows = []; // from portfolio.csv
+let historyRows = [];   // from history.csv
+let currentFilter = null; // underlying or null
+
 async function fetchText(path) {
   const res = await fetch(path, { cache: "no-cache" });
   if (!res.ok) return "";
@@ -23,27 +28,20 @@ function fmtUsd(n) {
   return num.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 }
 
-function byDateAsc(a, b) {
-  return a.date.localeCompare(b.date);
-}
+function byDateAsc(a, b) { return a.date.localeCompare(b.date); }
 
 async function loadLastRun() {
   const t = await fetchText("./data/last_run.txt");
   const el = document.getElementById("last-run");
-  if (t) {
-    const when = new Date(t.trim());
-    el.textContent = "Last update: " + when.toLocaleString();
-  } else {
-    el.textContent = "Last update: (not yet recorded)";
-  }
+  if (t) el.textContent = "Last update: " + new Date(t.trim()).toLocaleString();
+  else el.textContent = "Last update: (not yet recorded)";
 }
 
-// Top-level stats
 async function loadStats() {
   const text = await fetchText("./data/portfolio.csv");
   const { rows } = parseCSV(text);
+  portfolioRows = rows;
   if (!rows.length) return;
-
   rows.sort(byDateAsc);
   const latest = rows[rows.length - 1];
 
@@ -70,69 +68,128 @@ async function loadStats() {
   }
 }
 
-async function loadPortfolioChart() {
-  const text = await fetchText("./data/portfolio.csv");
+async function loadHistory() {
+  const text = await fetchText("./data/history.csv");
   const { rows } = parseCSV(text);
-  if (!rows.length) return;
+  historyRows = rows;
+}
 
-  rows.sort(byDateAsc);
-
-  const labels     = rows.map(r => r.date);
-  const totalValue = rows.map(r => parseFloat(r.total_value));
-  const totalPnl   = rows.map(r => parseFloat(r.total_pnl));
-  const totalPct   = rows.map(r => {
+function computeSeriesAll() {
+  if (!portfolioRows.length) return { labels: [], value: [], pnl: [], pct: [] };
+  const rows = [...portfolioRows].sort(byDateAsc);
+  const labels = rows.map(r => r.date);
+  const value  = rows.map(r => parseFloat(r.total_value));
+  const pnl    = rows.map(r => parseFloat(r.total_pnl));
+  const pct    = rows.map(r => {
     const c = parseFloat(r.total_cost_basis);
     const p = parseFloat(r.total_pnl);
     return c > 0 ? (p / c) * 100 : 0;
   });
+  return { labels, value, pnl, pct };
+}
 
+function computeSeriesUnderlying(underlying) {
+  if (!historyRows.length) return { labels: [], value: [], pnl: [], pct: [] };
+  // aggregate per date for a given underlying
+  const map = new Map(); // date -> {value, cost}
+  for (const r of historyRows) {
+    if (r.underlying !== underlying) continue;
+    const d = r.date;
+    const val = parseFloat(r.value);
+    const cpc = parseFloat(r.cost_per_contract);
+    const cons = parseInt(r.contracts, 10);
+    const cost = (isFinite(cpc) && isFinite(cons)) ? cpc * cons * 100 : 0;
+    const entry = map.get(d) || { value: 0, cost: 0 };
+    entry.value += isFinite(val) ? val : 0;
+    entry.cost  += isFinite(cost) ? cost : 0;
+    map.set(d, entry);
+  }
+  const labels = Array.from(map.keys()).sort();
+  const value  = labels.map(d => map.get(d).value);
+  const cost   = labels.map(d => map.get(d).cost);
+  const pnl    = labels.map((_, i) => value[i] - cost[i]);
+  const pct    = labels.map((_, i) => cost[i] > 0 ? (pnl[i] / cost[i]) * 100 : 0);
+  return { labels, value, pnl, pct };
+}
+
+function renderOrUpdateChart(series, labelPrefix = "Total") {
   const ctx = document.getElementById("portfolioChart").getContext("2d");
-  const chart = new Chart(ctx, {
-    type: "line",
-    data: {
-      labels,
-      datasets: [
-        { label: "Total Value", data: totalValue, yAxisID: "y" },
-        { label: "Total P&L",   data: totalPnl,   yAxisID: "y" },
-        { label: "Total Return (%)", data: totalPct, yAxisID: "yPct", borderDash: [6, 4], pointRadius: 2 }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: "index", intersect: false },
-      elements: { line: { tension: 0.25 } },
-      scales: {
-        y: {
-          title: { display: true, text: "USD" },
-          beginAtZero: false
-        },
-        yPct: {
-          position: "right",
-          title: { display: true, text: "% Return" },
-          grid: { drawOnChartArea: false },
-          ticks: { callback: v => `${v}%` }
-        }
+  const data = {
+    labels: series.labels,
+    datasets: [
+      { label: `${labelPrefix} Value`, data: series.value, yAxisID: "y" },
+      { label: `${labelPrefix} P&L`,   data: series.pnl,   yAxisID: "y" },
+      { label: `${labelPrefix} Return (%)`, data: series.pct, yAxisID: "yPct", borderDash: [6, 4], pointRadius: 2 }
+    ]
+  };
+
+  const opts = {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: "index", intersect: false },
+    elements: { line: { tension: 0.25 } },
+    scales: {
+      y: {
+        title: { display: true, text: "USD" },
+        beginAtZero: false
       },
-      plugins: {
-        tooltip: {
-          callbacks: {
-            label: (ctx) => {
-              const ds = ctx.dataset.label || "";
-              const v = ctx.parsed.y;
-              if (ctx.dataset.yAxisID === "yPct") return `${ds}: ${v.toFixed(2)}%`;
-              return `${ds}: ${fmtUsd(v)}`;
-            }
+      yPct: {
+        position: "right",
+        title: { display: true, text: "% Return" },
+        grid: { drawOnChartArea: false },
+        min: 0,                            // always start % axis at 0%
+        ticks: { callback: v => `${v}%` }
+      }
+    },
+    plugins: {
+      tooltip: {
+        callbacks: {
+          label: (ctx) => {
+            const ds = ctx.dataset.label || "";
+            const v = ctx.parsed.y;
+            if (ctx.dataset.yAxisID === "yPct") return `${ds}: ${v.toFixed(2)}%`;
+            return `${ds}: ${fmtUsd(v)}`;
           }
         }
       }
     }
-  });
+  };
+
+  if (portfolioChart) {
+    portfolioChart.data = data;
+    portfolioChart.options = opts;
+    portfolioChart.update();
+  } else {
+    portfolioChart = new Chart(ctx, { type: "line", data, options: opts });
+  }
+}
+
+function applyFilter(underlying) {
+  currentFilter = underlying;
+  const series = computeSeriesUnderlying(underlying);
+  renderOrUpdateChart(series, underlying);
+  const badge = document.getElementById("chart-filter-label");
+  if (badge) badge.textContent = `${underlying} — double-click to reset`;
+}
+
+function resetFilter() {
+  currentFilter = null;
+  const series = computeSeriesAll();
+  renderOrUpdateChart(series, "Total");
+  const badge = document.getElementById("chart-filter-label");
+  if (badge) badge.textContent = "";
+}
+
+async function loadPortfolioChart() {
+  // default view: total portfolio
+  const series = computeSeriesAll();
+  renderOrUpdateChart(series, "Total");
 }
 
 async function loadPositionsTable() {
   const text = await fetchText("./data/history.csv");
   const { rows } = parseCSV(text);
+  historyRows = rows;
   if (!rows.length) return;
 
   rows.sort(byDateAsc);
@@ -155,16 +212,31 @@ async function loadPositionsTable() {
       <td class="${pnl >= 0 ? "good" : "bad"}">${fmtUsd(pnl)}</td>
       <td class="${pnlPct >= 0 ? "good" : "bad"}">${(isFinite(pnlPct) ? pnlPct.toFixed(2) : "-")}%</td>
     `;
+    // click-to-filter by underlying (first token of symbolKey)
+    tr.addEventListener("click", () => {
+      const firstCell = tr.querySelector("td");
+      const key = (firstCell?.textContent || "").trim();
+      const underlying = key.split(" ")[0];
+      if (underlying) applyFilter(underlying);
+    });
     tbody.appendChild(tr);
   });
+
+  // double-click to reset filter (chart and table)
+  const table = document.getElementById("positions-table");
+  table.addEventListener("dblclick", resetFilter);
+
+  const canvas = document.getElementById("portfolioChart");
+  canvas.addEventListener("dblclick", resetFilter);
 }
 
 async function init() {
   await Promise.all([
     loadLastRun(),
     loadStats(),
-    loadPortfolioChart(),
-    loadPositionsTable()
+    loadHistory()
   ]);
+  await loadPortfolioChart();
+  await loadPositionsTable();
 }
 init();

@@ -41,6 +41,7 @@ thead { background: #111827; }
 th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
 th:first-child, td:first-child { text-align: left; white-space: normal; }
 tbody tr:hover { background: rgba(255,255,255,0.03); }
+tbody tr { cursor: pointer; }
 
 /* Chart sizing */
 #portfolioChart { display: block; width: 100%; max-height: 380px; }
@@ -48,6 +49,9 @@ tbody tr:hover { background: rgba(255,255,255,0.03); }
 /* Colors */
 .bad { color: var(--bad); }
 .good { color: var(--good); }
+
+/* small badge next to title */
+.badge { margin-left: 8px; color: var(--muted); font-size: 0.9rem; font-weight: 600; }
 
 /* --- mobile tweaks --- */
 @media (max-width: 640px) {
