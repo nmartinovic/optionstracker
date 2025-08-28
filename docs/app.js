@@ -112,8 +112,22 @@ function computeSeriesUnderlying(underlying) {
   return { labels, value, pnl, pct };
 }
 
+function percentAxisBounds(pcts) {
+  const finite = pcts.filter(v => Number.isFinite(v));
+  if (!finite.length) return { suggestedMin: -10, suggestedMax: 10 }; // safe default
+  const minPct = Math.min(...finite);
+  const maxPct = Math.max(...finite);
+  // ensure 0% is included in the visible range without forcing it to be the min
+  return {
+    suggestedMin: Math.min(0, minPct),
+    suggestedMax: Math.max(0, maxPct)
+  };
+}
+
 function renderOrUpdateChart(series, labelPrefix = "Total") {
   const ctx = document.getElementById("portfolioChart").getContext("2d");
+  const yPctBounds = percentAxisBounds(series.pct);
+
   const data = {
     labels: series.labels,
     datasets: [
@@ -137,7 +151,9 @@ function renderOrUpdateChart(series, labelPrefix = "Total") {
         position: "right",
         title: { display: true, text: "% Return" },
         grid: { drawOnChartArea: false },
-        min: 0,                            // always start % axis at 0%
+        // include 0% in the scale but allow negative values
+        suggestedMin: yPctBounds.suggestedMin,
+        suggestedMax: yPctBounds.suggestedMax,
         ticks: { callback: v => `${v}%` }
       }
     },
