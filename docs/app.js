@@ -37,35 +37,74 @@ async function loadLastRun() {
   else el.textContent = "Last update: (not yet recorded)";
 }
 
-async function loadStats() {
-  const text = await fetchText("./data/portfolio.csv");
-  const { rows } = parseCSV(text);
-  portfolioRows = rows;
-  if (!rows.length) return;
-  rows.sort(byDateAsc);
-  const latest = rows[rows.length - 1];
+/* ---------- HEADER STATS (overall vs filtered) ---------- */
 
-  const totalValue = parseFloat(latest.total_value);
-  const totalCost  = parseFloat(latest.total_cost_basis);
-  const totalPnl   = parseFloat(latest.total_pnl);
-  const totalPct   = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
-
+function setHeaderStats(totalValue, totalPnl, totalPct) {
   const vEl = document.getElementById("stat-total-value");
   const pEl = document.getElementById("stat-total-pnl");
   const pctEl = document.getElementById("stat-total-pct");
 
-  if (vEl) vEl.textContent = fmtUsd(totalValue);
+  if (vEl) vEl.textContent = fmtUsd(totalValue ?? 0);
   if (pEl) {
-    pEl.textContent = fmtUsd(totalPnl);
-    pEl.classList.toggle("good", totalPnl >= 0);
-    pEl.classList.toggle("bad", totalPnl < 0);
+    pEl.textContent = fmtUsd(totalPnl ?? 0);
+    pEl.classList.toggle("good", (totalPnl ?? 0) >= 0);
+    pEl.classList.toggle("bad", (totalPnl ?? 0) < 0);
   }
   if (pctEl) {
     const txt = isFinite(totalPct) ? totalPct.toFixed(2) + "%" : "-";
     pctEl.textContent = txt;
-    pctEl.classList.toggle("good", totalPct >= 0);
-    pctEl.classList.toggle("bad", totalPct < 0);
+    pctEl.classList.toggle("good", (totalPct ?? 0) >= 0);
+    pctEl.classList.toggle("bad", (totalPct ?? 0) < 0);
   }
+}
+
+function updateHeaderStatsOverall() {
+  if (!portfolioRows.length) return;
+  const rows = [...portfolioRows].sort(byDateAsc);
+  const latest = rows[rows.length - 1];
+  const totalValue = parseFloat(latest.total_value);
+  const totalCost  = parseFloat(latest.total_cost_basis);
+  const totalPnl   = parseFloat(latest.total_pnl);
+  const totalPct   = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
+  setHeaderStats(totalValue, totalPnl, totalPct);
+}
+
+function updateHeaderStatsUnderlying(underlying) {
+  if (!historyRows.length) return;
+  // find latest date present in history
+  const dates = Array.from(new Set(historyRows.map(r => r.date))).sort();
+  if (!dates.length) return;
+  const latestDate = dates[dates.length - 1];
+
+  // sum value and cost for that underlying on the latest date
+  const todays = historyRows.filter(r => r.date === latestDate && r.underlying === underlying);
+  let totalValue = 0, totalCost = 0;
+  for (const r of todays) {
+    const value = parseFloat(r.value);
+    const cpc   = parseFloat(r.cost_per_contract);
+    const cons  = parseInt(r.contracts, 10);
+    const cost  = (isFinite(cpc) && isFinite(cons)) ? cpc * cons * 100 : 0;
+    totalValue += isFinite(value) ? value : 0;
+    totalCost  += isFinite(cost) ? cost : 0;
+  }
+  const totalPnl = totalValue - totalCost;
+  const totalPct = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
+  setHeaderStats(totalValue, totalPnl, totalPct);
+}
+
+function updateHeaderStatsByFilter() {
+  if (currentFilter) updateHeaderStatsUnderlying(currentFilter);
+  else updateHeaderStatsOverall();
+}
+
+/* ---------- LOADERS ---------- */
+
+async function loadStats() {
+  const text = await fetchText("./data/portfolio.csv");
+  const { rows } = parseCSV(text);
+  portfolioRows = rows;
+  // show overall by default; filtered view will override
+  updateHeaderStatsOverall();
 }
 
 async function loadHistory() {
@@ -112,12 +151,14 @@ function computeSeriesUnderlying(underlying) {
   return { labels, value, pnl, pct };
 }
 
+/* ---------- CHART ---------- */
+
 function percentAxisBounds(pcts) {
   const finite = pcts.filter(v => Number.isFinite(v));
   if (!finite.length) return { suggestedMin: -10, suggestedMax: 10 }; // safe default
   const minPct = Math.min(...finite);
   const maxPct = Math.max(...finite);
-  // ensure 0% is included in the visible range without forcing it to be the min
+  // ensure 0% is included in the range (not necessarily the min)
   return {
     suggestedMin: Math.min(0, minPct),
     suggestedMax: Math.max(0, maxPct)
@@ -151,7 +192,6 @@ function renderOrUpdateChart(series, labelPrefix = "Total") {
         position: "right",
         title: { display: true, text: "% Return" },
         grid: { drawOnChartArea: false },
-        // include 0% in the scale but allow negative values
         suggestedMin: yPctBounds.suggestedMin,
         suggestedMax: yPctBounds.suggestedMax,
         ticks: { callback: v => `${v}%` }
@@ -180,10 +220,13 @@ function renderOrUpdateChart(series, labelPrefix = "Total") {
   }
 }
 
+/* ---------- FILTERING ---------- */
+
 function applyFilter(underlying) {
   currentFilter = underlying;
   const series = computeSeriesUnderlying(underlying);
   renderOrUpdateChart(series, underlying);
+  updateHeaderStatsByFilter();
   const badge = document.getElementById("chart-filter-label");
   if (badge) badge.textContent = `${underlying} — double-click to reset`;
 }
@@ -192,9 +235,12 @@ function resetFilter() {
   currentFilter = null;
   const series = computeSeriesAll();
   renderOrUpdateChart(series, "Total");
+  updateHeaderStatsByFilter();
   const badge = document.getElementById("chart-filter-label");
   if (badge) badge.textContent = "";
 }
+
+/* ---------- PAGE SECTIONS ---------- */
 
 async function loadPortfolioChart() {
   // default view: total portfolio
@@ -246,11 +292,13 @@ async function loadPositionsTable() {
   canvas.addEventListener("dblclick", resetFilter);
 }
 
+/* ---------- INIT ---------- */
+
 async function init() {
   await Promise.all([
     loadLastRun(),
-    loadStats(),
-    loadHistory()
+    loadStats(),   // sets overall stats + stores portfolioRows
+    loadHistory()  // stores historyRows for filtering
   ]);
   await loadPortfolioChart();
   await loadPositionsTable();
