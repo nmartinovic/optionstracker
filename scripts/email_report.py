@@ -1,7 +1,8 @@
 # scripts/email_report.py
-# Weekly email for Options Tracker (Brevo). Generates a chart, commits it to docs/images/, and emails HTML.
+# Weekly email for Options Tracker (Brevo). Generates a chart, commits it to docs/images/,
+# waits for GitHub Pages to serve it, then emails HTML (and attaches the PNG).
 
-import os, sys, math, json, subprocess, datetime as dt
+import os, sys, math, json, base64, time, subprocess, datetime as dt
 from pathlib import Path
 import pandas as pd
 import requests
@@ -23,12 +24,13 @@ IMG_PATH = ROOT / "docs" / "images" / "weekly-report.png"
 PORTFOLIO_CSV = DATA_DIR / "portfolio.csv"
 HISTORY_CSV   = DATA_DIR / "history.csv"
 
-# --- ENV (same pattern as your martyvswinslow project) ---
+# --- ENV ---
 BREVO_API_KEY   = os.environ.get("BREVO_API_KEY", "")
 FROM_EMAIL      = os.environ.get("REPORT_FROM_EMAIL", "")
 TO_EMAILS_RAW   = os.environ.get("REPORT_TO_EMAILS", "").strip()
 SITE_URL        = os.environ.get("SITE_URL", "").strip().rstrip("/")
 GITHUB_REPO     = os.environ.get("GITHUB_REPOSITORY", "")
+GITHUB_SHA      = os.environ.get("GITHUB_SHA", "")[:7]
 
 def compute_pages_url() -> str:
     """If SITE_URL not set, derive GitHub Pages URL:
@@ -44,7 +46,6 @@ def compute_pages_url() -> str:
             return base
         return f"{base}/{repo}"
     return ""
-# (Pattern borrowed from your other repo.) 
 
 def parse_recipients(raw: str):
     parts = [p.strip() for p in raw.replace("\n", ",").replace(" ", ",").split(",") if p.strip()]
@@ -89,14 +90,12 @@ def make_chart_png(pf: pd.DataFrame, save_path: Path):
     if plt is None or np is None:
         raise RuntimeError("matplotlib/numpy not available")
 
-    # Build series (use full history; y2 axis is percentage)
     dates = pf["date"].dt.date.values
     values = pf["total_value"].values.astype(float)
     pnls   = pf["total_pnl"].values.astype(float)
     costs  = pf["total_cost_basis"].values.astype(float)
     pct_ret = np.where(costs > 0, (pnls / costs) * 100.0, 0.0)
 
-    # bounds for % axis so 0% is visible but not forced as min
     finite_pct = pct_ret[np.isfinite(pct_ret)]
     if finite_pct.size == 0:
         y2_min, y2_max = -10, 10
@@ -119,7 +118,6 @@ def make_chart_png(pf: pd.DataFrame, save_path: Path):
     ax1.grid(True, axis="y", linestyle=":")
     for sp in ("top","right","left","bottom"): ax1.spines[sp].set_visible(False)
 
-    # simple legend
     lines1, labels1 = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
     ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper left", frameon=False)
@@ -141,14 +139,26 @@ def commit_chart_if_changed():
         subprocess.run(["git","commit","-m", f"chore(email): update weekly chart {dt.date.today().isoformat()}"], check=True)
         subprocess.run(["git","push"], check=True)
 
-def build_email_html(pf: pd.DataFrame, hist: pd.DataFrame) -> str:
+def wait_for_pages_asset(url: str, timeout_sec: int = 300, interval_sec: int = 5):
+    """Wait until the GitHub Pages asset returns 200 to avoid race with deployment."""
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        try:
+            r = requests.get(url, headers={"Cache-Control":"no-cache", "Pragma":"no-cache"}, timeout=10)
+            if r.status_code == 200 and r.content:
+                return True
+        except Exception:
+            pass
+        time.sleep(interval_sec)
+    return False
+
+def build_email_html(pf: pd.DataFrame, hist: pd.DataFrame, public_img_url: str) -> str:
     latest = pf.iloc[-1]
     total_value = float(latest["total_value"])
     total_cost  = float(latest["total_cost_basis"])
     total_pnl   = float(latest["total_pnl"])
     total_pct   = (total_pnl / total_cost * 100.0) if total_cost > 0 else 0.0
 
-    # Δ vs 7 days (compare to the most recent row <= latest_date - 7d)
     latest_date = pd.to_datetime(latest["date"]).date()
     cutoff = latest_date - dt.timedelta(days=7)
     older = pf[pf["date"].dt.date <= cutoff]
@@ -159,15 +169,12 @@ def build_email_html(pf: pd.DataFrame, hist: pd.DataFrame) -> str:
     else:
         delta7 = 0.0
 
-    # latest positions table (from history.csv)
     latest_hist_date = hist["date"].max()
     todays = hist[hist["date"] == latest_hist_date].copy()
     todays.sort_values("pnl", ascending=False, inplace=True)
 
-    pages = compute_pages_url()
-    img_tag = f"<img src='{pages}/images/{IMG_PATH.name}?t={int(dt.datetime.utcnow().timestamp())}' alt='Options Tracker chart' style='width:100%;max-width:1000px;border-radius:12px;display:block;margin:8px 0'/>" if pages else ""
+    img_tag = f"<img src='{public_img_url}' alt='Options Tracker chart' style='width:100%;max-width:1000px;border-radius:12px;display:block;margin:8px 0'/>" if public_img_url else ""
 
-    # build rows (limit 12 for email compactness)
     rows_html = []
     for _, r in todays.head(12).iterrows():
         rows_html.append(
@@ -181,6 +188,7 @@ def build_email_html(pf: pd.DataFrame, hist: pd.DataFrame) -> str:
             f"</tr>"
         )
 
+    pages = compute_pages_url()
     link_html = (f"<p style='margin:8px 0 0'><a href='{pages}' "
                  f"style='color:#2563eb;text-decoration:none'>Open the live dashboard →</a></p>") if pages else ""
 
@@ -238,26 +246,37 @@ def build_email_html(pf: pd.DataFrame, hist: pd.DataFrame) -> str:
   </div>
 </body></html>"""
 
-def send_email_with_brevo(html: str):
+def send_email_with_brevo(html: str, attach_path: Path):
     if not BREVO_API_KEY:
         raise RuntimeError("BREVO_API_KEY missing")
     to_list = parse_recipients(TO_EMAILS_RAW)
     if not to_list:
         raise RuntimeError("REPORT_TO_EMAILS is missing or empty")
 
+    attachments = []
+    try:
+        b = attach_path.read_bytes()
+        attachments.append({
+            "name": attach_path.name,
+            "content": base64.b64encode(b).decode("ascii")
+        })
+    except Exception as e:
+        print("WARN: could not read attachment:", e)
+
     payload = {
         "sender": {"email": FROM_EMAIL or "no-reply@example.com", "name": "Options Tracker"},
         "to": to_list,
         "subject": f"Options Tracker — Weekly Update ({dt.date.today().isoformat()})",
-        "htmlContent": html
+        "htmlContent": html,
+        "attachment": attachments
     }
     r = requests.post(
         "https://api.brevo.com/v3/smtp/email",
         headers={"accept":"application/json","content-type":"application/json","api-key":BREVO_API_KEY},
-        json=payload, timeout=45
+        json=payload, timeout=60
     )
     if r.status_code not in (200, 201, 202):
-        print("Brevo error:", r.status_code, r.text)
+        print("Brevo error:", r.status_code, r.text[:500])
         r.raise_for_status()
     print("Brevo accepted:", r.text[:300])
 
@@ -265,8 +284,18 @@ def main():
     pf, hist = load_data()
     make_chart_png(pf, IMG_PATH)
     commit_chart_if_changed()
-    html = build_email_html(pf, hist)
-    send_email_with_brevo(html)
+
+    pages = compute_pages_url()
+    cache_bust = GITHUB_SHA or str(int(dt.datetime.utcnow().timestamp()))
+    public_img_url = f"{pages}/images/{IMG_PATH.name}?v={cache_bust}" if pages else ""
+
+    if public_img_url:
+        ok = wait_for_pages_asset(public_img_url, timeout_sec=300, interval_sec=5)
+        if not ok:
+            print("WARN: Image not visible on Pages yet; sending email anyway (attachment included).")
+
+    html = build_email_html(pf, hist, public_img_url)
+    send_email_with_brevo(html, IMG_PATH)
 
 if __name__ == "__main__":
     main()
