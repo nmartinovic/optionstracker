@@ -9,26 +9,20 @@ jobs:
   email:
     runs-on: ubuntu-latest
     permissions:
-      contents: write     # commit the chart PNG so Pages can serve it
+      contents: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          # reuse your repo requirements (pandas/requests) + add plotting libs only here
           pip install -r requirements.txt matplotlib numpy
-
-      - name: Generate chart and send email
+      - name: Generate chart and send email (SMTP inline)
         env:
-          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
           REPORT_FROM_EMAIL: ${{ secrets.REPORT_FROM_EMAIL }}
-          REPORT_TO_EMAILS: ${{ secrets.REPORT_TO_EMAILS }}
-          SITE_URL: ${{ secrets.SITE_URL }}
+          REPORT_TO_EMAILS:  ${{ secrets.REPORT_TO_EMAILS }}
+          BREVO_SMTP_LOGIN:  ${{ secrets.BREVO_SMTP_LOGIN }}
+          BREVO_SMTP_KEY:    ${{ secrets.BREVO_SMTP_KEY }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: python scripts/email_report.py
+        run: python scripts/email_report_smtp.py
