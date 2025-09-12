@@ -101,11 +101,10 @@ function updateHeaderStatsByFilter() {
 
 /* ---------- countdown (Mar 20, 2026) ---------- */
 function initCountdown() {
-  const target = new Date(2026, 2, 20); // Mar = month index 2
+  const target = new Date(2026, 2, 20); // Mar = index 2
   const start  = new Date(2025, 2, 20); // one-year window
   const today  = midnight(new Date());
 
-  // days left (ceil so it ticks down at midnight local time)
   const MS = 24 * 60 * 60 * 1000;
   const daysLeft = Math.max(0, Math.ceil((midnight(target) - today) / MS));
   const daysLeftEl = document.getElementById("days-left");
@@ -118,26 +117,11 @@ function initCountdown() {
   const fill = document.getElementById("progress-fill");
   if (fill) fill.style.width = pct + "%";
 
-  // titles under progress bar
+  // labels under progress bar
   const sLab = document.getElementById("progress-start");
   const eLab = document.getElementById("progress-end");
   if (sLab) sLab.textContent = fmtShort(start);
   if (eLab) eLab.textContent = fmtShort(target);
-
-  // build the grid (one square per day)
-  const grid = document.getElementById("days-grid");
-  if (grid) {
-    grid.innerHTML = "";
-    const frag = document.createDocumentFragment();
-    for (let i = 0; i <= totalDays; i++) {
-      const d = addDays(start, i);
-      const div = document.createElement("div");
-      div.className = "day" + (d < today ? " checked" : (d.getTime() === today.getTime() ? " today" : ""));
-      div.title = fmtShort(d);
-      frag.appendChild(div);
-    }
-    grid.appendChild(frag);
-  }
 
   if (statusEl) {
     statusEl.textContent = daysLeft === 0

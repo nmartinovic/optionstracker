@@ -30,9 +30,7 @@ header h1 { margin: 0 0 8px; font-weight: 700; letter-spacing: 0.3px; }
 .countdown .countdown-header {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
 }
-.countdown-number {
-  text-align: right;
-}
+.countdown-number { text-align: right; }
 .countdown-number #days-left {
   display: inline-block;
   font-size: 2.2rem;
@@ -60,31 +58,6 @@ header h1 { margin: 0 0 8px; font-weight: 700; letter-spacing: 0.3px; }
 .progress-labels {
   display: flex; justify-content: space-between; align-items: center;
   margin-top: 6px; color: var(--muted); font-size: 0.85rem;
-}
-
-/* days grid */
-.days-grid {
-  --cell: 14px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(var(--cell), var(--cell)));
-  gap: 6px;
-  margin-top: 12px;
-}
-.day {
-  width: var(--cell);
-  height: var(--cell);
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  background: #0e1318;
-}
-.day.checked {
-  background: linear-gradient(180deg, rgba(96,165,250,0.9), rgba(96,165,250,0.6));
-  border-color: transparent;
-  box-shadow: 0 0 0 1px rgba(96,165,250,0.05) inset;
-}
-.day.today {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
 /* --- stats layout --- */
@@ -123,9 +96,6 @@ tbody tr { cursor: pointer; }
 
   .stats { grid-template-columns: 1fr; gap: 10px; }
   .stat .value { font-size: 1.4rem; }
-
-  .days-grid { --cell: 11px; gap: 4px; }
-  .countdown-number #days-left { font-size: 1.8rem; }
 
   table { font-size: 0.9rem; }
   th, td { padding: 8px 10px; }
