@@ -15,6 +15,33 @@
       <p class="muted">Midpoint − $0.05 per contract, floored at $0.00. Updated daily.</p>
       <p id="last-run" class="muted">Last update: …</p>
 
+      <!-- Long-term gains countdown -->
+      <section class="card countdown">
+        <div class="countdown-header">
+          <div>
+            <h2 class="h2-tight">Days until Long-Term Gains</h2>
+            <div class="muted small">Target: Mar 20, 2026</div>
+          </div>
+          <div class="countdown-number">
+            <span id="days-left">—</span>
+            <div class="muted small">days left</div>
+          </div>
+        </div>
+
+        <div class="progress-wrap">
+          <div class="progress-bar" aria-label="Progress toward long-term gains">
+            <div id="progress-fill"></div>
+          </div>
+          <div class="progress-labels">
+            <span id="progress-start">Mar 20, 2025</span>
+            <span id="progress-end">Mar 20, 2026</span>
+          </div>
+        </div>
+
+        <div id="days-grid" class="days-grid" aria-label="Checklist of days toward long-term gains"></div>
+        <div id="countdown-status" class="muted small"></div>
+      </section>
+
       <!-- Top-level stats -->
       <section class="stats card">
         <div class="stat">

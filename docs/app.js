@@ -3,6 +3,7 @@ let portfolioRows = []; // from portfolio.csv
 let historyRows = [];   // from history.csv
 let currentFilter = null; // underlying or null
 
+/* ---------- utils ---------- */
 async function fetchText(path) {
   const res = await fetch(path, { cache: "no-cache" });
   if (!res.ok) return "";
@@ -29,7 +30,11 @@ function fmtUsd(n) {
 }
 
 function byDateAsc(a, b) { return a.date.localeCompare(b.date); }
+function midnight(d)     { return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+function addDays(d, n)   { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+function fmtShort(d)     { return d.toLocaleDateString(undefined, { month:"short", day:"numeric", year:"numeric" }); }
 
+/* ---------- last run ---------- */
 async function loadLastRun() {
   const t = await fetchText("./data/last_run.txt");
   const el = document.getElementById("last-run");
@@ -37,8 +42,7 @@ async function loadLastRun() {
   else el.textContent = "Last update: (not yet recorded)";
 }
 
-/* ---------- HEADER STATS (overall vs filtered) ---------- */
-
+/* ---------- header stats (overall vs filtered) ---------- */
 function setHeaderStats(totalValue, totalPnl, totalPct) {
   const vEl = document.getElementById("stat-total-value");
   const pEl = document.getElementById("stat-total-pnl");
@@ -71,12 +75,10 @@ function updateHeaderStatsOverall() {
 
 function updateHeaderStatsUnderlying(underlying) {
   if (!historyRows.length) return;
-  // find latest date present in history
   const dates = Array.from(new Set(historyRows.map(r => r.date))).sort();
   if (!dates.length) return;
   const latestDate = dates[dates.length - 1];
 
-  // sum value and cost for that underlying on the latest date
   const todays = historyRows.filter(r => r.date === latestDate && r.underlying === underlying);
   let totalValue = 0, totalCost = 0;
   for (const r of todays) {
@@ -97,13 +99,58 @@ function updateHeaderStatsByFilter() {
   else updateHeaderStatsOverall();
 }
 
-/* ---------- LOADERS ---------- */
+/* ---------- countdown (Mar 20, 2026) ---------- */
+function initCountdown() {
+  const target = new Date(2026, 2, 20); // Mar = month index 2
+  const start  = new Date(2025, 2, 20); // one-year window
+  const today  = midnight(new Date());
 
+  // days left (ceil so it ticks down at midnight local time)
+  const MS = 24 * 60 * 60 * 1000;
+  const daysLeft = Math.max(0, Math.ceil((midnight(target) - today) / MS));
+  const daysLeftEl = document.getElementById("days-left");
+  const statusEl   = document.getElementById("countdown-status");
+  if (daysLeftEl) daysLeftEl.textContent = daysLeft.toString();
+
+  const totalDays   = Math.max(1, Math.round((midnight(target) - midnight(start)) / MS));
+  const elapsedDays = Math.min(totalDays, Math.max(0, Math.round((today - midnight(start)) / MS)));
+  const pct = Math.min(100, Math.max(0, (elapsedDays / totalDays) * 100));
+  const fill = document.getElementById("progress-fill");
+  if (fill) fill.style.width = pct + "%";
+
+  // titles under progress bar
+  const sLab = document.getElementById("progress-start");
+  const eLab = document.getElementById("progress-end");
+  if (sLab) sLab.textContent = fmtShort(start);
+  if (eLab) eLab.textContent = fmtShort(target);
+
+  // build the grid (one square per day)
+  const grid = document.getElementById("days-grid");
+  if (grid) {
+    grid.innerHTML = "";
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i <= totalDays; i++) {
+      const d = addDays(start, i);
+      const div = document.createElement("div");
+      div.className = "day" + (d < today ? " checked" : (d.getTime() === today.getTime() ? " today" : ""));
+      div.title = fmtShort(d);
+      frag.appendChild(div);
+    }
+    grid.appendChild(frag);
+  }
+
+  if (statusEl) {
+    statusEl.textContent = daysLeft === 0
+      ? "🎉 Long-term gains reached!"
+      : `Progress: ${elapsedDays}/${totalDays} days (${pct.toFixed(1)}%)`;
+  }
+}
+
+/* ---------- loaders ---------- */
 async function loadStats() {
   const text = await fetchText("./data/portfolio.csv");
   const { rows } = parseCSV(text);
   portfolioRows = rows;
-  // show overall by default; filtered view will override
   updateHeaderStatsOverall();
 }
 
@@ -113,6 +160,7 @@ async function loadHistory() {
   historyRows = rows;
 }
 
+/* ---------- chart series ---------- */
 function computeSeriesAll() {
   if (!portfolioRows.length) return { labels: [], value: [], pnl: [], pct: [] };
   const rows = [...portfolioRows].sort(byDateAsc);
@@ -129,7 +177,6 @@ function computeSeriesAll() {
 
 function computeSeriesUnderlying(underlying) {
   if (!historyRows.length) return { labels: [], value: [], pnl: [], pct: [] };
-  // aggregate per date for a given underlying
   const map = new Map(); // date -> {value, cost}
   for (const r of historyRows) {
     if (r.underlying !== underlying) continue;
@@ -151,14 +198,12 @@ function computeSeriesUnderlying(underlying) {
   return { labels, value, pnl, pct };
 }
 
-/* ---------- CHART ---------- */
-
+/* ---------- chart ---------- */
 function percentAxisBounds(pcts) {
   const finite = pcts.filter(v => Number.isFinite(v));
-  if (!finite.length) return { suggestedMin: -10, suggestedMax: 10 }; // safe default
+  if (!finite.length) return { suggestedMin: -10, suggestedMax: 10 };
   const minPct = Math.min(...finite);
   const maxPct = Math.max(...finite);
-  // ensure 0% is included in the range (not necessarily the min)
   return {
     suggestedMin: Math.min(0, minPct),
     suggestedMax: Math.max(0, maxPct)
@@ -220,8 +265,7 @@ function renderOrUpdateChart(series, labelPrefix = "Total") {
   }
 }
 
-/* ---------- FILTERING ---------- */
-
+/* ---------- filtering ---------- */
 function applyFilter(underlying) {
   currentFilter = underlying;
   const series = computeSeriesUnderlying(underlying);
@@ -240,10 +284,8 @@ function resetFilter() {
   if (badge) badge.textContent = "";
 }
 
-/* ---------- PAGE SECTIONS ---------- */
-
+/* ---------- table ---------- */
 async function loadPortfolioChart() {
-  // default view: total portfolio
   const series = computeSeriesAll();
   renderOrUpdateChart(series, "Total");
 }
@@ -274,7 +316,6 @@ async function loadPositionsTable() {
       <td class="${pnl >= 0 ? "good" : "bad"}">${fmtUsd(pnl)}</td>
       <td class="${pnlPct >= 0 ? "good" : "bad"}">${(isFinite(pnlPct) ? pnlPct.toFixed(2) : "-")}%</td>
     `;
-    // click-to-filter by underlying (first token of symbolKey)
     tr.addEventListener("click", () => {
       const firstCell = tr.querySelector("td");
       const key = (firstCell?.textContent || "").trim();
@@ -284,22 +325,16 @@ async function loadPositionsTable() {
     tbody.appendChild(tr);
   });
 
-  // double-click to reset filter (chart and table)
   const table = document.getElementById("positions-table");
   table.addEventListener("dblclick", resetFilter);
-
   const canvas = document.getElementById("portfolioChart");
   canvas.addEventListener("dblclick", resetFilter);
 }
 
-/* ---------- INIT ---------- */
-
+/* ---------- init ---------- */
 async function init() {
-  await Promise.all([
-    loadLastRun(),
-    loadStats(),   // sets overall stats + stores portfolioRows
-    loadHistory()  // stores historyRows for filtering
-  ]);
+  initCountdown();
+  await Promise.all([loadLastRun(), loadStats(), loadHistory()]);
   await loadPortfolioChart();
   await loadPositionsTable();
 }
